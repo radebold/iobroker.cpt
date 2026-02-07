@@ -1,0 +1,30 @@
+{
+  "common": {
+    "name": "CPT ChargePoint"
+  },
+  "tabs": [
+    {
+      "data": "stations",
+      "label": "Stationen",
+      "items": [
+        {
+          "type": "table",
+          "name": "stations",
+          "label": "Ladestationen",
+          "items": [
+            {
+              "name": "name",
+              "label": "Positionsname",
+              "type": "text"
+            },
+            {
+              "name": "id",
+              "label": "deviceId",
+              "type": "number"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
