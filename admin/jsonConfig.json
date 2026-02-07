@@ -4,35 +4,59 @@
   "items": {
     "interval": {
       "type": "number",
-      "label": "Polling-Intervall (Minuten)",
+      "label": {
+        "en": "Polling interval (minutes)",
+        "de": "Polling-Intervall (Minuten)"
+      },
       "min": 1,
       "max": 1440,
       "default": 5
     },
     "stations": {
       "type": "table",
-      "label": "Stationen",
+      "label": {
+        "en": "Stations",
+        "de": "Stationen"
+      },
       "items": [
+        {
+          "type": "checkbox",
+          "attr": "enabled",
+          "title": {
+            "en": "Enabled",
+            "de": "Aktiv"
+          },
+          "width": 90,
+          "default": true
+        },
         {
           "type": "text",
           "attr": "id",
-          "title": "ID (intern)",
+          "title": {
+            "en": "ID (internal)",
+            "de": "ID (intern)"
+          },
           "width": 140
         },
         {
           "type": "text",
           "attr": "name",
-          "title": "Name",
+          "title": {
+            "en": "Name",
+            "de": "Name"
+          },
           "width": 220
         },
         {
           "type": "number",
           "attr": "deviceId",
-          "title": "Device ID",
+          "title": {
+            "en": "Device ID",
+            "de": "Device ID"
+          },
           "width": 160
         }
       ],
-      "noDelete": false,
       "addRow": true,
       "deleteRow": true
     }

@@ -19,7 +19,7 @@ class CptAdapter extends utils.Adapter {
     async onReady() {
         this.log.info('Adapter CPT gestartet');
 
-        // Debug-Ausgabe
+        // Debug-Ausgabe: komplette Konfiguration
         this.log.info('Konfiguration (this.config): ' + JSON.stringify(this.config));
 
         const stationsRaw = this.config.stations || [];
@@ -29,12 +29,20 @@ class CptAdapter extends utils.Adapter {
         const stations = (Array.isArray(stationsRaw) ? stationsRaw : [])
             .filter((s) => s && typeof s === 'object')
             .map((s, index) => {
-                const id = s.id || `station${index + 1}`; // interne ID
+                // interne ID (für Anzeige/Logging)
+                const id = s.id || `station${index + 1}`;
+
                 // ChargePoint erwartet "deviceId" als Query-Param
-                const deviceId = s.deviceId ?? s.stationId ?? s.id; // Fallbacks
+                // Fallbacks: deviceId -> stationId -> id (wenn jemand nur id eingibt)
+                const deviceId = s.deviceId ?? s.stationId ?? s.id;
+
+                // Name ist optional
                 const name = s.name || `station_${id}`;
 
-                return { ...s, id, deviceId, name };
+                // Enable-Flag (default: true)
+                const enabled = s.enabled !== false;
+
+                return { ...s, id, deviceId, name, enabled };
             })
             .filter((s) => {
                 if (!s.deviceId) {
@@ -53,7 +61,7 @@ class CptAdapter extends utils.Adapter {
             return;
         }
 
-        // Objekte anlegen
+        // Objekte anlegen (auch für deaktivierte Stationen, damit sie sichtbar sind)
         for (const [index, station] of stations.entries()) {
             const name = station.name || `station_${station.id || index}`;
             const id = station.id;
@@ -67,7 +75,7 @@ class CptAdapter extends utils.Adapter {
 
             const prefix = `stations.${safeName}`;
 
-            this.log.info(`Erstelle Objekte für: ${prefix} (Name: ${name}, ID: ${id}, deviceId: ${deviceId})`);
+            this.log.info(`Erstelle Objekte für: ${prefix} (Name: ${name}, ID: ${id}, deviceId: ${deviceId}, enabled: ${station.enabled})`);
 
             await this.setObjectNotExistsAsync(prefix, {
                 type: 'channel',
@@ -82,6 +90,13 @@ class CptAdapter extends utils.Adapter {
             });
             await this.setStateAsync(`${prefix}.deviceId`, { val: String(deviceId), ack: true });
 
+            await this.setObjectNotExistsAsync(`${prefix}.enabled`, {
+                type: 'state',
+                common: { name: 'Aktiv', type: 'boolean', role: 'switch', read: true, write: false },
+                native: {},
+            });
+            await this.setStateAsync(`${prefix}.enabled`, { val: !!station.enabled, ack: true });
+
             await this.setObjectNotExistsAsync(`${prefix}.status`, {
                 type: 'state',
                 common: { name: 'Status', type: 'string', role: 'value', read: true, write: false },
@@ -94,7 +109,9 @@ class CptAdapter extends utils.Adapter {
                 native: {},
             });
 
-            await this.setStateAsync(`${prefix}.status`, { val: 'initialisiert', ack: true });
+            // initialer Status je nach enabled
+            const initialStatus = station.enabled ? 'initialisiert' : 'deaktiviert';
+            await this.setStateAsync(`${prefix}.status`, { val: initialStatus, ack: true });
             await this.setStateAsync(`${prefix}.lastUpdate`, { val: new Date().toISOString(), ack: true });
 
             this.log.info(`Objekte für ${prefix} erstellt`);
@@ -122,6 +139,13 @@ class CptAdapter extends utils.Adapter {
                 .replace(/^_+|_+$/g, '');
 
             const prefix = `stations.${safeName}`;
+
+            if (station.enabled === false) {
+                // Nur sichtbar halten, aber nicht refreshen
+                await this.setStateAsync(`${prefix}.status`, { val: 'deaktiviert', ack: true });
+                await this.setStateAsync(`${prefix}.lastUpdate`, { val: new Date().toISOString(), ack: true });
+                continue;
+            }
 
             try {
                 const url = `https://mc.chargepoint.com/map-prod/v3/station/info?deviceId=${station.deviceId}`;

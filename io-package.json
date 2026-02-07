@@ -1,7 +1,7 @@
 {
   "common": {
     "name": "cpt",
-    "version": "0.0.1",
+    "version": "0.1.0",
     "title": "CPT ChargePoint",
     "titleLang": {
       "en": "CPT ChargePoint",
@@ -33,17 +33,14 @@
     "dataSource": "poll",
     "materialize": true,
     "materializeTab": true,
-
     "adminUI": {
       "config": "json"
     }
   },
-
   "native": {
     "interval": 5,
     "stations": []
   },
-
   "protectedNative": [],
   "encryptedNative": [],
   "objects": [],
