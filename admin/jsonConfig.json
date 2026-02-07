@@ -1,6 +1,6 @@
 {
   "common": {
-    "name": "CPT – ChargePoint"
+    "name": "CPT ChargePoint"
   },
   "tabs": [
     {
@@ -27,6 +27,21 @@
               "width": "40%"
             }
           ]
+        }
+      ]
+    },
+    {
+      "data": "interval",
+      "label": "Einstellungen",
+      "items": [
+        {
+          "type": "slider",
+          "name": "interval",
+          "label": "Abfrageintervall (Minuten)",
+          "min": 1,
+          "max": 60,
+          "step": 1,
+          "default": 5
         }
       ]
     }
