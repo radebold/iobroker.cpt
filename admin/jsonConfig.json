@@ -17,14 +17,14 @@
               "label": "Positionsname",
               "type": "text",
               "required": true,
-              "width": "50%"
+              "width": "60%"
             },
             {
               "name": "id",
               "label": "deviceId",
               "type": "number",
               "required": true,
-              "width": "50%"
+              "width": "40%"
             }
           ]
         }
