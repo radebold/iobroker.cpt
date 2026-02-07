@@ -12,7 +12,7 @@
       "de": "Adapter für den Status von ChargePoint-Ladestationen"
     },
     "authors": [
-      "radebold <deine@email.de>"
+      "radebold <radebold@gmail.com>"
     ],
     "license": "MIT",
     "platform": "Javascript/Node.js",
@@ -33,16 +33,17 @@
     "dataSource": "poll",
     "materialize": true,
     "materializeTab": true,
-    "adminTab": {
-      "name": "CPT",
-      "icon": "cpt.png",
-      "ignoreVersion": false
+
+    "adminUI": {
+      "config": "json"
     }
   },
+
   "native": {
-    "stations": [],
-    "interval": 5
+    "interval": 5,
+    "stations": []
   },
+
   "protectedNative": [],
   "encryptedNative": [],
   "objects": [],

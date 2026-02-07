@@ -1,49 +1,40 @@
 {
-  "common": {
-    "name": "CPT ChargePoint"
-  },
-  "tabs": [
-    {
-      "data": "stations",
-      "label": "Ladestationen",
-      "items": [
-        {
-          "type": "table",
-          "name": "stations",
-          "label": "Stationen",
-          "items": [
-            {
-              "name": "name",
-              "label": "Positionsname",
-              "type": "text",
-              "required": true,
-              "width": "60%"
-            },
-            {
-              "name": "id",
-              "label": "deviceId",
-              "type": "number",
-              "required": true,
-              "width": "40%"
-            }
-          ]
-        }
-      ]
+  "i18n": true,
+  "type": "panel",
+  "items": {
+    "interval": {
+      "type": "number",
+      "label": "Polling-Intervall (Minuten)",
+      "min": 1,
+      "max": 1440,
+      "default": 5
     },
-    {
-      "data": "interval",
-      "label": "Einstellungen",
+    "stations": {
+      "type": "table",
+      "label": "Stationen",
       "items": [
         {
-          "type": "slider",
-          "name": "interval",
-          "label": "Abfrageintervall (Minuten)",
-          "min": 1,
-          "max": 60,
-          "step": 1,
-          "default": 5
+          "type": "text",
+          "attr": "id",
+          "title": "ID (intern)",
+          "width": 140
+        },
+        {
+          "type": "text",
+          "attr": "name",
+          "title": "Name",
+          "width": 220
+        },
+        {
+          "type": "number",
+          "attr": "deviceId",
+          "title": "Device ID",
+          "width": 160
         }
-      ]
+      ],
+      "noDelete": false,
+      "addRow": true,
+      "deleteRow": true
     }
-  ]
+  }
 }
