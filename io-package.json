@@ -8,16 +8,17 @@
       "de": "CPT ChargePoint"
     },
     "desc": {
-      "en": "Adapter for ChargePoint charging stations",
-      "de": "Adapter für ChargePoint Ladestationen"
+      "en": "Adapter for ChargePoint charging stations status",
+      "de": "Adapter für den Status von ChargePoint-Ladestationen"
     },
     "authors": [
-      "radebold <radebold@gmail.com>"
+      "radebold <deine@email.de>"
     ],
     "license": "MIT",
     "platform": "Javascript/Node.js",
     "mode": "daemon",
     "icon": "cpt.png",
+    "type": "hardware",
     "keywords": [
       "chargepoint",
       "ladestation",
@@ -27,7 +28,6 @@
     ],
     "readme": "https://github.com/radebold/iobroker.cpt/blob/main/README.md",
     "loglevel": "info",
-    "type": "hardware",
     "compact": true,
     "connectionType": "cloud",
     "dataSource": "poll",
@@ -37,15 +37,11 @@
       "name": "CPT",
       "icon": "cpt.png",
       "ignoreVersion": false
-    },
-    "availableModes": [
-      "daemon"
-    ],
-    "webByVersion": true
+    }
   },
   "native": {
     "stations": [],
-    "interval": 300
+    "interval": 5
   },
   "protectedNative": [],
   "encryptedNative": [],
