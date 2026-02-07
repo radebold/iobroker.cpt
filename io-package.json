@@ -1,0 +1,26 @@
+{
+  "common": {
+    "name": "cpt",
+    "version": "0.0.1",
+    "title": "CPT ChargePoint",
+    "desc": {
+      "de": "Adapter für ChargePoint Ladestationen",
+      "en": "Adapter for ChargePoint charging stations"
+    },
+    "platform": "Javascript/Node.js",
+    "mode": "daemon",
+    "icon": "cpt.png",
+    "type": "hardware",
+    "keywords": ["chargepoint", "ladestation", "ev"],
+    "readme": "https://github.com/radebold/iobroker.cpt/blob/main/README.md",
+    "loglevel": "info",
+    "extIcon": "",
+    "authors": ["radebold"],
+    "compact": true,
+    "materialize": true,
+    "materializeTab": true
+  },
+  "native": {
+    "stations": []
+  }
+}
