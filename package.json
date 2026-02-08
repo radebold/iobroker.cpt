@@ -1,15 +1,12 @@
 {
   "name": "iobroker.cpt",
-  "version": "0.0.1",
-  "description": "ChargePoint Ladestationen Adapter",
+  "version": "0.2.3-beta.1",
+  "description": "ioBroker adapter for ChargePoint stations",
   "main": "main.js",
-  "scripts": {
-    "start": "node main.js --loglevel debug"
-  },
   "author": "radebold",
   "license": "MIT",
   "dependencies": {
-    "@iobroker/adapter-core": "^3.2.0",
-    "axios": "^1.7.7"
+    "@iobroker/adapter-core": "^3.0.0",
+    "axios": "^1.6.0"
   }
 }
