@@ -1,64 +1,151 @@
 {
   "i18n": true,
-  "type": "panel",
+  "type": "tabs",
   "items": {
-    "interval": {
-      "type": "number",
-      "label": {
-        "en": "Polling interval (minutes)",
-        "de": "Polling-Intervall (Minuten)"
-      },
-      "min": 1,
-      "max": 1440,
-      "default": 5
-    },
-    "stations": {
-      "type": "table",
+    "main": {
+      "type": "panel",
       "label": {
         "en": "Stations",
         "de": "Stationen"
       },
-      "items": [
-        {
-          "type": "checkbox",
-          "attr": "enabled",
-          "title": {
-            "en": "Enabled",
-            "de": "Aktiv"
-          },
-          "width": 80,
-          "default": true
-        },
-        {
-          "type": "text",
-          "attr": "name",
-          "title": {
-            "en": "Name",
-            "de": "Name"
-          },
-          "width": 260
-        },
-        {
+      "items": {
+        "interval": {
           "type": "number",
-          "attr": "deviceId1",
-          "title": {
-            "en": "Device ID (P1)",
-            "de": "Device ID (P1)"
+          "label": {
+            "en": "Polling interval (minutes)",
+            "de": "Polling-Intervall (Minuten)"
           },
-          "width": 170
+          "min": 1,
+          "max": 1440,
+          "default": 5
         },
-        {
-          "type": "number",
-          "attr": "deviceId2",
-          "title": {
-            "en": "Device ID (P2, optional)",
-            "de": "Device ID (P2, optional)"
+        "stations": {
+          "type": "table",
+          "label": {
+            "en": "Stations",
+            "de": "Stationen"
           },
-          "width": 190
+          "items": [
+            {
+              "type": "checkbox",
+              "attr": "enabled",
+              "title": {
+                "en": "Enabled",
+                "de": "Aktiv"
+              },
+              "width": 80,
+              "default": true
+            },
+            {
+              "type": "checkbox",
+              "attr": "notifyOnAvailable",
+              "title": {
+                "en": "Notify",
+                "de": "Notify"
+              },
+              "width": 80,
+              "default": false
+            },
+            {
+              "type": "text",
+              "attr": "name",
+              "title": {
+                "en": "Name",
+                "de": "Name"
+              },
+              "width": 240
+            },
+            {
+              "type": "number",
+              "attr": "deviceId1",
+              "title": {
+                "en": "Device ID (P1)",
+                "de": "Device ID (P1)"
+              },
+              "width": 170
+            },
+            {
+              "type": "number",
+              "attr": "deviceId2",
+              "title": {
+                "en": "Device ID (P2, optional)",
+                "de": "Device ID (P2, optional)"
+              },
+              "width": 190
+            }
+          ],
+          "addRow": true,
+          "deleteRow": true
         }
-      ],
-      "addRow": true,
-      "deleteRow": true
+      }
+    },
+    "communication": {
+      "type": "panel",
+      "label": {
+        "en": "Communication",
+        "de": "Kommunikation"
+      },
+      "items": {
+        "_hint": {
+          "type": "staticText",
+          "text": {
+            "en": "Add one or more notification channels. The adapter will call sendTo(<instance>, <command>, <payload>). Use placeholders in payload: {{text}}, {{city}}, {{station}}, {{freePorts}}, {{portCount}}, {{status}}.",
+            "de": "Lege einen oder mehrere Benachrichtigungskanäle an. Der Adapter ruft sendTo(<Instanz>, <Command>, <Payload>) auf. Platzhalter im Payload: {{text}}, {{city}}, {{station}}, {{freePorts}}, {{portCount}}, {{status}}."
+          }
+        },
+        "channels": {
+          "type": "table",
+          "label": {
+            "en": "Channels",
+            "de": "Kanäle"
+          },
+          "items": [
+            {
+              "type": "checkbox",
+              "attr": "enabled",
+              "title": {
+                "en": "Enabled",
+                "de": "Aktiv"
+              },
+              "width": 80,
+              "default": true
+            },
+            {
+              "type": "text",
+              "attr": "instance",
+              "title": {
+                "en": "Adapter instance",
+                "de": "Adapter-Instanz"
+              },
+              "width": 160,
+              "placeholder": "telegram.0"
+            },
+            {
+              "type": "text",
+              "attr": "command",
+              "title": {
+                "en": "Command",
+                "de": "Command"
+              },
+              "width": 120,
+              "default": "send",
+              "placeholder": "send"
+            },
+            {
+              "type": "text",
+              "attr": "payload",
+              "title": {
+                "en": "Payload (JSON)",
+                "de": "Payload (JSON)"
+              },
+              "width": 420,
+              "placeholder": "{\"text\":\"{{text}}\"}"
+            }
+          ],
+          "addRow": true,
+          "deleteRow": true
+        }
+      }
     }
   }
 }

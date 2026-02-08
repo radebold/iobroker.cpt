@@ -47,6 +47,13 @@ class CptAdapter extends utils.Adapter {
         return this.makeSafeName(base) || `station_${station.deviceId1}`;
     }
 
+    fillPlaceholders(str, ctx) {
+        return (str || '').replace(/\{\{(\w+)\}\}/g, (_, key) => {
+            const v = ctx[key];
+            return v === undefined || v === null ? '' : String(v);
+        });
+    }
+
     async ensureCityChannel(cityPrefix, cityName) {
         await this.setObjectNotExistsAsync(cityPrefix, {
             type: 'channel',
@@ -64,50 +71,25 @@ class CptAdapter extends utils.Adapter {
 
         await this.setObjectNotExistsAsync('tools.export', {
             type: 'state',
-            common: {
-                name: 'Export Stationen (Trigger)',
-                type: 'boolean',
-                role: 'button',
-                read: true,
-                write: true,
-                def: false,
-            },
+            common: { name: 'Export Stationen (Trigger)', type: 'boolean', role: 'button', read: true, write: true, def: false },
             native: {},
         });
 
         await this.setObjectNotExistsAsync('tools.exportJson', {
             type: 'state',
-            common: {
-                name: 'Export JSON',
-                type: 'string',
-                role: 'json',
-                read: true,
-                write: false,
-            },
+            common: { name: 'Export JSON', type: 'string', role: 'json', read: true, write: false },
             native: {},
         });
 
         await this.setObjectNotExistsAsync('tools.exportFile', {
             type: 'state',
-            common: {
-                name: 'Export Datei (Adapter-Datenverzeichnis)',
-                type: 'string',
-                role: 'text',
-                read: true,
-                write: false,
-            },
+            common: { name: 'Export Datei (Adapter-Datenverzeichnis)', type: 'string', role: 'text', read: true, write: false },
             native: {},
         });
 
         await this.setObjectNotExistsAsync('tools.lastExport', {
             type: 'state',
-            common: {
-                name: 'Letzter Export',
-                type: 'string',
-                role: 'date',
-                read: true,
-                write: false,
-            },
+            common: { name: 'Letzter Export', type: 'string', role: 'date', read: true, write: false },
             native: {},
         });
 
@@ -141,6 +123,18 @@ class CptAdapter extends utils.Adapter {
             native: {},
         });
         await this.setStateAsync(`${stationPrefix}.enabled`, { val: !!station.enabled, ack: true });
+
+        // Notify flag as writable object (per station)
+        await this.setObjectNotExistsAsync(`${stationPrefix}.notifyOnAvailable`, {
+            type: 'state',
+            common: { name: 'Benachrichtigen wenn verfügbar', type: 'boolean', role: 'switch', read: true, write: true, def: false },
+            native: {},
+        });
+        // Only set default once (do not overwrite user's choice)
+        const curNotify = await this.getStateAsync(`${stationPrefix}.notifyOnAvailable`);
+        if (!curNotify || curNotify.val === null || curNotify.val === undefined) {
+            await this.setStateAsync(`${stationPrefix}.notifyOnAvailable`, { val: !!station.notifyOnAvailable, ack: true });
+        }
 
         await this.setObjectNotExistsAsync(`${stationPrefix}.statusDerived`, {
             type: 'state',
@@ -182,66 +176,32 @@ class CptAdapter extends utils.Adapter {
             native: {},
         });
 
-        await this.setObjectNotExistsAsync(`${portPrefix}.status`, {
-            type: 'state',
-            common: { name: 'Status', type: 'string', role: 'value', read: true, write: false },
-            native: {},
-        });
+        const states = [
+            ['status', { name: 'Status', type: 'string', role: 'value' }],
+            ['statusV2', { name: 'StatusV2', type: 'string', role: 'value' }],
+            ['evseId', { name: 'EVSE ID', type: 'string', role: 'value' }],
+            ['maxPowerKw', { name: 'Max Power', type: 'number', role: 'value.power', unit: 'kW' }],
+            ['level', { name: 'Level', type: 'string', role: 'text' }],
+            ['displayLevel', { name: 'Display Level', type: 'string', role: 'text' }],
+            ['plugType', { name: 'Plug Type', type: 'string', role: 'text' }],
+            ['displayPlugType', { name: 'Display Plug Type', type: 'string', role: 'text' }],
+            ['lastUpdate', { name: 'Letztes Update', type: 'string', role: 'date' }],
+        ];
 
-        await this.setObjectNotExistsAsync(`${portPrefix}.statusV2`, {
-            type: 'state',
-            common: { name: 'StatusV2', type: 'string', role: 'value', read: true, write: false },
-            native: {},
-        });
-
-        await this.setObjectNotExistsAsync(`${portPrefix}.evseId`, {
-            type: 'state',
-            common: { name: 'EVSE ID', type: 'string', role: 'value', read: true, write: false },
-            native: {},
-        });
-
-        await this.setObjectNotExistsAsync(`${portPrefix}.maxPowerKw`, {
-            type: 'state',
-            common: { name: 'Max Power', type: 'number', role: 'value.power', unit: 'kW', read: true, write: false },
-            native: {},
-        });
-
-        await this.setObjectNotExistsAsync(`${portPrefix}.level`, {
-            type: 'state',
-            common: { name: 'Level', type: 'string', role: 'text', read: true, write: false },
-            native: {},
-        });
-
-        await this.setObjectNotExistsAsync(`${portPrefix}.displayLevel`, {
-            type: 'state',
-            common: { name: 'Display Level', type: 'string', role: 'text', read: true, write: false },
-            native: {},
-        });
-
-        await this.setObjectNotExistsAsync(`${portPrefix}.plugType`, {
-            type: 'state',
-            common: { name: 'Plug Type', type: 'string', role: 'text', read: true, write: false },
-            native: {},
-        });
-
-        await this.setObjectNotExistsAsync(`${portPrefix}.displayPlugType`, {
-            type: 'state',
-            common: { name: 'Display Plug Type', type: 'string', role: 'text', read: true, write: false },
-            native: {},
-        });
-
-        await this.setObjectNotExistsAsync(`${portPrefix}.lastUpdate`, {
-            type: 'state',
-            common: { name: 'Letztes Update', type: 'string', role: 'date', read: true, write: false },
-            native: {},
-        });
+        for (const [id, common] of states) {
+            await this.setObjectNotExistsAsync(`${portPrefix}.${id}`, {
+                type: 'state',
+                common: { read: true, write: false, ...common },
+                native: {},
+            });
+        }
 
         return portPrefix;
     }
 
     async cleanupRemovedStations(allowedStationChannels, allowedCityChannels) {
         const startkey = `${this.namespace}.stations.`;
-        const endkey = `${this.namespace}.stations.香`;
+        const endkey = `${this.namespace}.stations.\u9999`;
 
         const view = await this.getObjectViewAsync('system', 'channel', { startkey, endkey });
         const rows = view?.rows || [];
@@ -251,6 +211,7 @@ class CptAdapter extends utils.Adapter {
             const rel = id.substring(`${this.namespace}.`.length);
             const parts = rel.split('.');
 
+            // stations.<city>.<station>
             if (parts.length === 3 && parts[0] === 'stations') {
                 if (!allowedStationChannels.has(id)) {
                     this.log.info(`Station nicht mehr in Config → lösche Objekte rekursiv: ${id}`);
@@ -265,6 +226,7 @@ class CptAdapter extends utils.Adapter {
             const id = row.id;
             const rel = id.substring(`${this.namespace}.`.length);
             const parts = rel.split('.');
+            // stations.<city>
             if (parts.length === 2 && parts[0] === 'stations') {
                 if (!allowedCityChannels.has(id)) {
                     this.log.info(`Ort nicht mehr in Config → lösche Channel rekursiv: ${id}`);
@@ -281,6 +243,9 @@ class CptAdapter extends utils.Adapter {
         await this.ensureToolsObjects();
         this.subscribeStates('tools.export');
 
+        // subscribe to all per-station notify flags
+        this.subscribeStates('stations.*.*.notifyOnAvailable');
+
         const intervalMin = Number(this.config.interval) || 5;
 
         const stations = (Array.isArray(this.config.stations) ? this.config.stations : [])
@@ -293,6 +258,7 @@ class CptAdapter extends utils.Adapter {
                 return {
                     name,
                     enabled,
+                    notifyOnAvailable: s.notifyOnAvailable === true,
                     deviceId1: deviceId1 ? Number(deviceId1) : null,
                     deviceId2: deviceId2 ? Number(deviceId2) : null,
                 };
@@ -302,7 +268,7 @@ class CptAdapter extends utils.Adapter {
         this.log.info(`Anzahl Stationen (gültig): ${stations.length}`);
         this.log.info(`Polling-Intervall: ${intervalMin} Minuten`);
 
-        // Initial fetch to know cities for cleanup
+        // Initial fetch to know cities for cleanup + create base objects
         const initialDataByStation = [];
         for (const st of stations) {
             const data1 = await this.safeFetch(st.deviceId1);
@@ -329,7 +295,6 @@ class CptAdapter extends utils.Adapter {
             return;
         }
 
-        // Ensure objects exist
         for (const item of initialDataByStation) {
             const st = item.st;
             const city = this.pickCity(item.data1, item.data2);
@@ -357,6 +322,8 @@ class CptAdapter extends utils.Adapter {
             await this.doExportStations();
             await this.setStateAsync('tools.export', { val: false, ack: true });
         }
+
+        // notifyOnAvailable is writable; no action needed, adapter reads it on transitions
     }
 
     async doExportStations() {
@@ -364,6 +331,7 @@ class CptAdapter extends utils.Adapter {
             .filter((s) => s && typeof s === 'object')
             .map((s, idx) => ({
                 enabled: s.enabled !== false,
+                notifyOnAvailable: s.notifyOnAvailable === true,
                 name: s.name || `station_${s.deviceId1 ?? s.stationId ?? s.deviceId ?? idx + 1}`,
                 deviceId1: Number(s.deviceId1 ?? s.stationId ?? s.deviceId ?? s.id),
                 deviceId2: s.deviceId2 ? Number(s.deviceId2) : null,
@@ -375,6 +343,7 @@ class CptAdapter extends utils.Adapter {
             adapter: 'cpt',
             version: this.version,
             interval: Number(this.config.interval) || 5,
+            channels: Array.isArray(this.config.channels) ? this.config.channels : [],
             stations,
         };
 
@@ -414,9 +383,42 @@ class CptAdapter extends utils.Adapter {
             const p2 = (data2?.portsInfo?.ports && data2.portsInfo.ports[0]) ? data2.portsInfo.ports[0] : {};
             return [{ ...p1, outletNumber: 1 }, { ...p2, outletNumber: 2 }];
         }
-
         const ports = Array.isArray(data1?.portsInfo?.ports) ? data1.portsInfo.ports : [];
         return ports;
+    }
+
+    async sendAvailableNotification(ctx) {
+        const channels = Array.isArray(this.config.channels) ? this.config.channels : [];
+        const enabledChannels = channels.filter((c) => c && c.enabled !== false && c.instance);
+
+        if (enabledChannels.length === 0) {
+            this.log.debug(`Keine Kommunikationskanäle konfiguriert – Notification übersprungen für ${ctx.station}`);
+            return;
+        }
+
+        for (const ch of enabledChannels) {
+            const instance = String(ch.instance).trim();
+            const command = (ch.command ? String(ch.command) : 'send').trim();
+
+            let payloadRaw = ch.payload ? String(ch.payload) : '{"text":"{{text}}"}';
+            payloadRaw = this.fillPlaceholders(payloadRaw, ctx);
+
+            let payloadObj = null;
+            try {
+                payloadObj = JSON.parse(payloadRaw);
+            } catch (e) {
+                this.log.warn(`Channel payload ist kein gültiges JSON (${instance}): ${e.message}`);
+                continue;
+            }
+
+            try {
+                // sendTo can accept (instance, command, msg)
+                this.sendTo(instance, command, payloadObj);
+                this.log.info(`Notification gesendet über ${instance}/${command} für ${ctx.city} / ${ctx.station}`);
+            } catch (e) {
+                this.log.warn(`sendTo fehlgeschlagen (${instance}/${command}): ${e.message}`);
+            }
+        }
     }
 
     async updateAllStations(stations) {
@@ -432,6 +434,10 @@ class CptAdapter extends utils.Adapter {
             await this.ensureCityChannel(`stations.${cityKey}`, city);
             await this.ensureStationObjects(stationPrefix, st);
 
+            // Read current notify flag (state, not config)
+            const notifyState = await this.getStateAsync(`${stationPrefix}.notifyOnAvailable`);
+            const notifyEnabled = notifyState?.val === true;
+
             if (st.enabled === false) {
                 await this.setStateAsync(`${stationPrefix}.statusDerived`, { val: 'deaktiviert', ack: true });
                 await this.setStateAsync(`${stationPrefix}.portCount`, { val: 0, ack: true });
@@ -446,10 +452,15 @@ class CptAdapter extends utils.Adapter {
             const freePorts = ports.reduce((acc, p) => acc + (this.normalizeStatus(p?.statusV2 || p?.status) === 'available' ? 1 : 0), 0);
             const derived = this.deriveStationStatusFromPorts(ports);
 
+            // Detect transition to available (use existing state to persist across restarts)
+            const prevState = await this.getStateAsync(`${stationPrefix}.statusDerived`);
+            const prev = prevState?.val ? String(prevState.val) : undefined;
+
             await this.setStateAsync(`${stationPrefix}.portCount`, { val: portCount, ack: true });
             await this.setStateAsync(`${stationPrefix}.freePorts`, { val: freePorts, ack: true });
             await this.setStateAsync(`${stationPrefix}.statusDerived`, { val: derived, ack: true });
 
+            // Update ports
             for (let i = 0; i < ports.length; i++) {
                 const port = ports[i] || {};
                 const outletNumber = port.outletNumber ?? (i + 1);
@@ -489,6 +500,20 @@ class CptAdapter extends utils.Adapter {
             }
 
             await this.setStateAsync(`${stationPrefix}.lastUpdate`, { val: new Date().toISOString(), ack: true });
+
+            // Notification: only on transition
+            if (notifyEnabled && prev !== undefined && prev !== 'available' && derived === 'available') {
+                const text = `🔌 Ladestation verfügbar\n\nOrt: ${city}\nStation: ${st.name}\nFreie Ports: ${freePorts} von ${portCount}`;
+                await this.sendAvailableNotification({
+                    text,
+                    city,
+                    station: st.name,
+                    freePorts,
+                    portCount,
+                    status: derived,
+                });
+            }
+
             this.log.info(`Aktualisiert: ${st.name} → city=${city}, freePorts=${freePorts}, portCount=${portCount}, derived=${derived}`);
         }
     }
