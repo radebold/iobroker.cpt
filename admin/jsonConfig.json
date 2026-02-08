@@ -31,12 +31,12 @@
         },
         {
           "type": "text",
-          "attr": "id",
+          "attr": "city",
           "title": {
-            "en": "ID (internal)",
-            "de": "ID (intern)"
+            "en": "City / Location",
+            "de": "Ort"
           },
-          "width": 140
+          "width": 180
         },
         {
           "type": "text",
@@ -55,6 +55,15 @@
             "de": "Device ID"
           },
           "width": 160
+        },
+        {
+          "type": "text",
+          "attr": "id",
+          "title": {
+            "en": "ID (internal)",
+            "de": "ID (intern)"
+          },
+          "width": 140
         }
       ],
       "addRow": true,
