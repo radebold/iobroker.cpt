@@ -10,6 +10,7 @@ class CptAdapter extends utils.Adapter {
         this.pollInterval = null;
 
         this.on('ready', this.onReady.bind(this));
+        this.on('stateChange', this.onStateChange.bind(this));
         this.on('unload', this.onUnload.bind(this));
     }
 
@@ -42,7 +43,6 @@ class CptAdapter extends utils.Adapter {
     }
 
     getStationKey(station) {
-        // Keep stable: name first, else use deviceId1
         const base = station.name ? station.name : `station_${station.deviceId1}`;
         return this.makeSafeName(base) || `station_${station.deviceId1}`;
     }
@@ -53,6 +53,65 @@ class CptAdapter extends utils.Adapter {
             common: { name: cityName },
             native: {},
         });
+    }
+
+    async ensureToolsObjects() {
+        await this.setObjectNotExistsAsync('tools', {
+            type: 'channel',
+            common: { name: 'Tools' },
+            native: {},
+        });
+
+        await this.setObjectNotExistsAsync('tools.export', {
+            type: 'state',
+            common: {
+                name: 'Export Stationen (Trigger)',
+                type: 'boolean',
+                role: 'button',
+                read: true,
+                write: true,
+                def: false,
+            },
+            native: {},
+        });
+
+        await this.setObjectNotExistsAsync('tools.exportJson', {
+            type: 'state',
+            common: {
+                name: 'Export JSON',
+                type: 'string',
+                role: 'json',
+                read: true,
+                write: false,
+            },
+            native: {},
+        });
+
+        await this.setObjectNotExistsAsync('tools.exportFile', {
+            type: 'state',
+            common: {
+                name: 'Export Datei (Adapter-Datenverzeichnis)',
+                type: 'string',
+                role: 'text',
+                read: true,
+                write: false,
+            },
+            native: {},
+        });
+
+        await this.setObjectNotExistsAsync('tools.lastExport', {
+            type: 'state',
+            common: {
+                name: 'Letzter Export',
+                type: 'string',
+                role: 'date',
+                read: true,
+                write: false,
+            },
+            native: {},
+        });
+
+        await this.setStateAsync('tools.export', { val: false, ack: true });
     }
 
     async ensureStationObjects(stationPrefix, station) {
@@ -186,9 +245,7 @@ class CptAdapter extends utils.Adapter {
 
         const view = await this.getObjectViewAsync('system', 'channel', { startkey, endkey });
         const rows = view?.rows || [];
-        this.log.info(`Cleanup: gefundene channels unter stations.*: ${rows.length}`);
 
-        // Delete station channels not in config: stations.<city>.<station>
         for (const row of rows) {
             const id = row.id;
             const rel = id.substring(`${this.namespace}.`.length);
@@ -202,7 +259,6 @@ class CptAdapter extends utils.Adapter {
             }
         }
 
-        // Delete city channels not used anymore: stations.<city>
         const view2 = await this.getObjectViewAsync('system', 'channel', { startkey, endkey });
         const rows2 = view2?.rows || [];
         for (const row of rows2) {
@@ -221,6 +277,9 @@ class CptAdapter extends utils.Adapter {
     async onReady() {
         this.log.info('Adapter CPT gestartet');
         this.log.info('Konfiguration: ' + JSON.stringify(this.config));
+
+        await this.ensureToolsObjects();
+        this.subscribeStates('tools.export');
 
         const intervalMin = Number(this.config.interval) || 5;
 
@@ -243,11 +302,8 @@ class CptAdapter extends utils.Adapter {
         this.log.info(`Anzahl Stationen (gültig): ${stations.length}`);
         this.log.info(`Polling-Intervall: ${intervalMin} Minuten`);
 
-        // Cleanup uses last-known city keys from existing objects; allowed cities are unknown until we fetch.
-        // We'll do a two-step startup:
-        // 1) Fetch once to know cities and create the allowed sets
-        // 2) Cleanup + create objects + update
-        let initialDataByStation = [];
+        // Initial fetch to know cities for cleanup
+        const initialDataByStation = [];
         for (const st of stations) {
             const data1 = await this.safeFetch(st.deviceId1);
             const data2 = st.deviceId2 ? await this.safeFetch(st.deviceId2) : null;
@@ -278,8 +334,8 @@ class CptAdapter extends utils.Adapter {
             const st = item.st;
             const city = this.pickCity(item.data1, item.data2);
             const cityKey = this.makeSafeName(city) || 'unbekannt';
-            const cityPrefix = `stations.${cityKey}`;
-            await this.ensureCityChannel(cityPrefix, city);
+
+            await this.ensureCityChannel(`stations.${cityKey}`, city);
 
             const stationKey = this.getStationKey(st);
             const stationPrefix = `stations.${cityKey}.${stationKey}`;
@@ -287,13 +343,57 @@ class CptAdapter extends utils.Adapter {
             await this.setStateAsync(`${stationPrefix}.freePorts`, { val: 0, ack: true });
         }
 
-        // First update
         await this.updateAllStations(stations);
 
-        // Polling
         this.pollInterval = setInterval(() => {
             this.updateAllStations(stations).catch((e) => this.log.error(`Polling-Fehler: ${e?.message || e}`));
         }, intervalMin * 60 * 1000);
+    }
+
+    async onStateChange(id, state) {
+        if (!state || state.ack) return;
+
+        if (id === `${this.namespace}.tools.export` && state.val === true) {
+            await this.doExportStations();
+            await this.setStateAsync('tools.export', { val: false, ack: true });
+        }
+    }
+
+    async doExportStations() {
+        const stations = (Array.isArray(this.config.stations) ? this.config.stations : [])
+            .filter((s) => s && typeof s === 'object')
+            .map((s, idx) => ({
+                enabled: s.enabled !== false,
+                name: s.name || `station_${s.deviceId1 ?? s.stationId ?? s.deviceId ?? idx + 1}`,
+                deviceId1: Number(s.deviceId1 ?? s.stationId ?? s.deviceId ?? s.id),
+                deviceId2: s.deviceId2 ? Number(s.deviceId2) : null,
+            }))
+            .filter((s) => !!s.deviceId1);
+
+        const payload = {
+            exportedAt: new Date().toISOString(),
+            adapter: 'cpt',
+            version: this.version,
+            interval: Number(this.config.interval) || 5,
+            stations,
+        };
+
+        const jsonStr = JSON.stringify(payload, null, 2);
+
+        await this.setStateAsync('tools.exportJson', { val: jsonStr, ack: true });
+
+        const filename = 'stations_export.json';
+        try {
+            await this.writeFileAsync(this.namespace, filename, jsonStr);
+            await this.setStateAsync('tools.exportFile', { val: filename, ack: true });
+        } catch (e) {
+            this.log.warn(`Konnte Export-Datei nicht schreiben: ${e?.message || e}`);
+            await this.setStateAsync('tools.exportFile', { val: '', ack: true });
+        }
+
+        await this.setStateAsync('tools.lastExport', { val: new Date().toISOString(), ack: true });
+
+        this.log.info(`Export erstellt: ${stations.length} Station(en)`);
     }
 
     async safeFetch(deviceId) {
@@ -309,24 +409,18 @@ class CptAdapter extends utils.Adapter {
     }
 
     buildLogicalPorts(data1, data2, hasSecondId) {
-        // If second ID exists: treat each ID as one "logical port" (take first port entry)
         if (hasSecondId) {
             const p1 = (data1?.portsInfo?.ports && data1.portsInfo.ports[0]) ? data1.portsInfo.ports[0] : {};
             const p2 = (data2?.portsInfo?.ports && data2.portsInfo.ports[0]) ? data2.portsInfo.ports[0] : {};
-            return [
-                { ...p1, outletNumber: 1 },
-                { ...p2, outletNumber: 2 },
-            ];
+            return [{ ...p1, outletNumber: 1 }, { ...p2, outletNumber: 2 }];
         }
 
-        // Otherwise: use ports from first response as-is
         const ports = Array.isArray(data1?.portsInfo?.ports) ? data1.portsInfo.ports : [];
         return ports;
     }
 
     async updateAllStations(stations) {
         for (const st of stations) {
-            // Fetch needed data
             const data1 = await this.safeFetch(st.deviceId1);
             const data2 = st.deviceId2 ? await this.safeFetch(st.deviceId2) : null;
 
@@ -335,7 +429,6 @@ class CptAdapter extends utils.Adapter {
             const stationKey = this.getStationKey(st);
             const stationPrefix = `stations.${cityKey}.${stationKey}`;
 
-            // Ensure city + station channels exist (in case city changed)
             await this.ensureCityChannel(`stations.${cityKey}`, city);
             await this.ensureStationObjects(stationPrefix, st);
 
@@ -357,7 +450,6 @@ class CptAdapter extends utils.Adapter {
             await this.setStateAsync(`${stationPrefix}.freePorts`, { val: freePorts, ack: true });
             await this.setStateAsync(`${stationPrefix}.statusDerived`, { val: derived, ack: true });
 
-            // Update each port
             for (let i = 0; i < ports.length; i++) {
                 const port = ports[i] || {};
                 const outletNumber = port.outletNumber ?? (i + 1);
@@ -397,7 +489,6 @@ class CptAdapter extends utils.Adapter {
             }
 
             await this.setStateAsync(`${stationPrefix}.lastUpdate`, { val: new Date().toISOString(), ack: true });
-
             this.log.info(`Aktualisiert: ${st.name} → city=${city}, freePorts=${freePorts}, portCount=${portCount}, derived=${derived}`);
         }
     }
