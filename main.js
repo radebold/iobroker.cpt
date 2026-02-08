@@ -5,10 +5,7 @@ const axios = require('axios');
 
 class CptAdapter extends utils.Adapter {
     constructor(options) {
-        super({
-            ...options,
-            name: 'cpt',
-        });
+        super({ ...options, name: 'cpt' });
 
         this.pollInterval = null;
 
@@ -29,7 +26,6 @@ class CptAdapter extends utils.Adapter {
             .map((p) => (p?.statusV2 || p?.status || 'unknown'))
             .map((s) => (typeof s === 'string' ? s.toLowerCase() : 'unknown'));
 
-        // Heuristik: "in_use/charging" schlägt "available" schlägt Rest
         if (statuses.some((s) => ['in_use', 'charging', 'occupied'].includes(s))) return 'in_use';
         if (statuses.some((s) => s === 'available')) return 'available';
         if (statuses.some((s) => ['unavailable', 'out_of_service', 'faulted', 'offline'].includes(s))) return 'unavailable';
@@ -37,11 +33,7 @@ class CptAdapter extends utils.Adapter {
     }
 
     async ensureStationObjects(prefix, station) {
-        await this.setObjectNotExistsAsync(prefix, {
-            type: 'channel',
-            common: { name: station.name },
-            native: {},
-        });
+        await this.setObjectNotExistsAsync(prefix, { type: 'channel', common: { name: station.name }, native: {} });
 
         await this.setObjectNotExistsAsync(`${prefix}.deviceId`, {
             type: 'state',
@@ -87,22 +79,13 @@ class CptAdapter extends utils.Adapter {
             native: {},
         });
 
-        // Parent channel for ports
-        await this.setObjectNotExistsAsync(`${prefix}.ports`, {
-            type: 'channel',
-            common: { name: 'Ports' },
-            native: {},
-        });
+        await this.setObjectNotExistsAsync(`${prefix}.ports`, { type: 'channel', common: { name: 'Ports' }, native: {} });
     }
 
     async ensurePortObjects(stationPrefix, outletNumber) {
         const portPrefix = `${stationPrefix}.ports.${outletNumber}`;
 
-        await this.setObjectNotExistsAsync(portPrefix, {
-            type: 'channel',
-            common: { name: `Port ${outletNumber}` },
-            native: {},
-        });
+        await this.setObjectNotExistsAsync(portPrefix, { type: 'channel', common: { name: `Port ${outletNumber}` }, native: {} });
 
         await this.setObjectNotExistsAsync(`${portPrefix}.status`, {
             type: 'state',
@@ -163,15 +146,19 @@ class CptAdapter extends utils.Adapter {
 
     async cleanupRemovedStations(allowedStationChannels) {
         const startkey = `${this.namespace}.stations.`;
-        const endkey = `${this.namespace}.stations.\u9999`;
+        // IMPORTANT: use a real high unicode char, NOT the string "\u9999"
+        const endkey = `${this.namespace}.stations.香`;
 
         const view = await this.getObjectViewAsync('system', 'channel', { startkey, endkey });
 
-        for (const row of (view?.rows || [])) {
+        const rows = view?.rows || [];
+        this.log.info(`Cleanup: gefundene channels unter stations.*: ${rows.length}`);
+
+        for (const row of rows) {
             const id = row.id;
 
             // Only delete direct station channels: <namespace>.stations.<safeName>
-            const rel = id.substring(`${this.namespace}.`.length);
+            const rel = id.substring(`${this.namespace}.`.length); // "stations.xxx" or "stations.xxx.ports"
             const parts = rel.split('.');
 
             if (parts.length !== 2) continue;
@@ -211,7 +198,7 @@ class CptAdapter extends utils.Adapter {
         this.log.info(`Anzahl Stationen (gültig): ${stations.length}`);
         this.log.info(`Polling-Intervall: ${intervalMin} Minuten`);
 
-        // Cleanup removed stations
+        // Cleanup removed stations (also works when stations.length === 0)
         const allowedStationChannels = new Set(
             stations.map((s) => `${this.namespace}.stations.${this.makeSafeName(s.name || `station_${s.id}`)}`)
         );
@@ -268,28 +255,23 @@ class CptAdapter extends utils.Adapter {
                 const res = await axios.get(url, { timeout: 12000 });
                 const data = res.data || {};
 
-                // Station status from API
                 const stationStatus = data?.stationStatus || data?.status || 'unknown';
                 await this.setStateAsync(`${prefix}.status`, { val: stationStatus, ack: true });
 
-                // Ports
                 const portsInfo = data?.portsInfo || {};
                 const ports = Array.isArray(portsInfo?.ports) ? portsInfo.ports : [];
                 const portCount = Number(portsInfo?.portCount ?? ports.length) || ports.length;
                 await this.setStateAsync(`${prefix}.portCount`, { val: portCount, ack: true });
 
-                // Free ports
                 const freePorts = ports.reduce((acc, p) => {
                     const s = (p?.statusV2 || p?.status || '').toString().toLowerCase();
                     return acc + (s === 'available' ? 1 : 0);
                 }, 0);
                 await this.setStateAsync(`${prefix}.freePorts`, { val: freePorts, ack: true });
 
-                // Derived status based on ports
                 const derived = this.deriveStationStatusFromPorts(ports);
                 await this.setStateAsync(`${prefix}.statusDerived`, { val: derived, ack: true });
 
-                // Update each port
                 for (let i = 0; i < ports.length; i++) {
                     const port = ports[i] || {};
                     const outletNumber = port.outletNumber ?? port.outlet ?? (i + 1);
@@ -300,7 +282,6 @@ class CptAdapter extends utils.Adapter {
                     const pStatusV2 = port.statusV2 || 'unknown';
                     const evseId = port.evseId ? String(port.evseId) : '';
 
-                    // maxPowerKw: may be number or numeric string
                     let maxPowerKw = null;
                     const prMax = port?.powerRange?.max;
                     if (typeof prMax === 'number') {
@@ -332,7 +313,7 @@ class CptAdapter extends utils.Adapter {
 
                 await this.setStateAsync(`${prefix}.lastUpdate`, { val: new Date().toISOString(), ack: true });
 
-                this.log.info(`Aktualisiert: ${station.name} → station=${stationStatus}, derived=${derived}, freePorts=${freePorts}, ports=${ports.length}`);
+                this.log.info(`Aktualisiert: ${station.name} → freePorts=${freePorts}, ports=${ports.length}`);
             } catch (err) {
                 const msg = err?.message || String(err);
                 this.log.error(`Fehler bei ${station.name || station.id}: ${msg}`);
