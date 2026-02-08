@@ -75,6 +75,12 @@ class CptAdapter extends utils.Adapter {
             native: {},
         });
 
+        await this.setObjectNotExistsAsync(`${prefix}.freePorts`, {
+            type: 'state',
+            common: { name: 'Freie Ports', type: 'number', role: 'value', read: true, write: false },
+            native: {},
+        });
+
         await this.setObjectNotExistsAsync(`${prefix}.lastUpdate`, {
             type: 'state',
             common: { name: 'Letztes Update', type: 'string', role: 'date', read: true, write: false },
@@ -155,6 +161,29 @@ class CptAdapter extends utils.Adapter {
         return portPrefix;
     }
 
+    async cleanupRemovedStations(allowedStationChannels) {
+        const startkey = `${this.namespace}.stations.`;
+        const endkey = `${this.namespace}.stations.\u9999`;
+
+        const view = await this.getObjectViewAsync('system', 'channel', { startkey, endkey });
+
+        for (const row of (view?.rows || [])) {
+            const id = row.id;
+
+            // Only delete direct station channels: <namespace>.stations.<safeName>
+            const rel = id.substring(`${this.namespace}.`.length);
+            const parts = rel.split('.');
+
+            if (parts.length !== 2) continue;
+            if (parts[0] !== 'stations') continue;
+
+            if (!allowedStationChannels.has(id)) {
+                this.log.info(`Station nicht mehr in Config → lösche Objekte rekursiv: ${id}`);
+                await this.delObjectAsync(id, { recursive: true });
+            }
+        }
+    }
+
     async onReady() {
         this.log.info('Adapter CPT gestartet');
         this.log.info('Konfiguration (this.config): ' + JSON.stringify(this.config));
@@ -181,6 +210,12 @@ class CptAdapter extends utils.Adapter {
 
         this.log.info(`Anzahl Stationen (gültig): ${stations.length}`);
         this.log.info(`Polling-Intervall: ${intervalMin} Minuten`);
+
+        // Cleanup removed stations
+        const allowedStationChannels = new Set(
+            stations.map((s) => `${this.namespace}.stations.${this.makeSafeName(s.name || `station_${s.id}`)}`)
+        );
+        await this.cleanupRemovedStations(allowedStationChannels);
 
         if (stations.length === 0) {
             this.log.warn('Keine gültigen Stationen in der Konfiguration gefunden');
@@ -221,6 +256,7 @@ class CptAdapter extends utils.Adapter {
             if (station.enabled === false) {
                 await this.setStateAsync(`${prefix}.status`, { val: 'deaktiviert', ack: true });
                 await this.setStateAsync(`${prefix}.statusDerived`, { val: 'deaktiviert', ack: true });
+                await this.setStateAsync(`${prefix}.freePorts`, { val: 0, ack: true });
                 await this.setStateAsync(`${prefix}.lastUpdate`, { val: new Date().toISOString(), ack: true });
                 continue;
             }
@@ -241,6 +277,13 @@ class CptAdapter extends utils.Adapter {
                 const ports = Array.isArray(portsInfo?.ports) ? portsInfo.ports : [];
                 const portCount = Number(portsInfo?.portCount ?? ports.length) || ports.length;
                 await this.setStateAsync(`${prefix}.portCount`, { val: portCount, ack: true });
+
+                // Free ports
+                const freePorts = ports.reduce((acc, p) => {
+                    const s = (p?.statusV2 || p?.status || '').toString().toLowerCase();
+                    return acc + (s === 'available' ? 1 : 0);
+                }, 0);
+                await this.setStateAsync(`${prefix}.freePorts`, { val: freePorts, ack: true });
 
                 // Derived status based on ports
                 const derived = this.deriveStationStatusFromPorts(ports);
@@ -289,7 +332,7 @@ class CptAdapter extends utils.Adapter {
 
                 await this.setStateAsync(`${prefix}.lastUpdate`, { val: new Date().toISOString(), ack: true });
 
-                this.log.info(`Aktualisiert: ${station.name} → station=${stationStatus}, derived=${derived}, ports=${ports.length}`);
+                this.log.info(`Aktualisiert: ${station.name} → station=${stationStatus}, derived=${derived}, freePorts=${freePorts}, ports=${ports.length}`);
             } catch (err) {
                 const msg = err?.message || String(err);
                 this.log.error(`Fehler bei ${station.name || station.id}: ${msg}`);
