@@ -15,38 +15,36 @@ class CptAdapter extends utils.Adapter {
 
     makeSafeName(name) {
         return (name || '')
+            .toString()
             .toLowerCase()
             .replace(/[^a-z0-9]/g, '_')
             .replace(/_+/g, '_')
             .replace(/^_+|_+$/g, '');
     }
 
-    deriveStationStatusFromPorts(ports) {
-        const statuses = (Array.isArray(ports) ? ports : [])
-            .map((p) => (p?.statusV2 || p?.status || 'unknown'))
-            .map((s) => (typeof s === 'string' ? s.toLowerCase() : 'unknown'));
+    normalizeStatus(val) {
+        const s = (val ?? 'unknown').toString().toLowerCase();
+        return s || 'unknown';
+    }
 
+    deriveStationStatusFromPorts(ports) {
+        const statuses = (Array.isArray(ports) ? ports : []).map((p) => this.normalizeStatus(p?.statusV2 || p?.status));
         if (statuses.some((s) => ['in_use', 'charging', 'occupied'].includes(s))) return 'in_use';
         if (statuses.some((s) => s === 'available')) return 'available';
         if (statuses.some((s) => ['unavailable', 'out_of_service', 'faulted', 'offline'].includes(s))) return 'unavailable';
         return statuses[0] || 'unknown';
     }
 
-    getCityKey(station) {
-        const city = (station.city || station.location || station.ort || '').toString().trim();
-        return city ? city : 'Unbekannt';
+    pickCity(data1, data2) {
+        const c1 = data1?.address?.city;
+        const c2 = data2?.address?.city;
+        return (c1 || c2 || 'Unbekannt').toString().trim() || 'Unbekannt';
     }
 
     getStationKey(station) {
-        // Prefer name, fallback to deviceId
-        const base = station.name ? station.name : `station_${station.deviceId}`;
-        return base;
-    }
-
-    getStationChannelId(station) {
-        const cityKey = this.makeSafeName(this.getCityKey(station)) || 'unbekannt';
-        const stationKey = this.makeSafeName(this.getStationKey(station)) || `station_${station.deviceId}`;
-        return `stations.${cityKey}.${stationKey}`;
+        // Keep stable: name first, else use deviceId1
+        const base = station.name ? station.name : `station_${station.deviceId1}`;
+        return this.makeSafeName(base) || `station_${station.deviceId1}`;
     }
 
     async ensureCityChannel(cityPrefix, cityName) {
@@ -64,12 +62,19 @@ class CptAdapter extends utils.Adapter {
             native: {},
         });
 
-        await this.setObjectNotExistsAsync(`${stationPrefix}.deviceId`, {
+        await this.setObjectNotExistsAsync(`${stationPrefix}.deviceId1`, {
             type: 'state',
-            common: { name: 'Device ID', type: 'string', role: 'value', read: true, write: false },
+            common: { name: 'Device ID (P1)', type: 'string', role: 'value', read: true, write: false },
             native: {},
         });
-        await this.setStateAsync(`${stationPrefix}.deviceId`, { val: String(station.deviceId), ack: true });
+        await this.setStateAsync(`${stationPrefix}.deviceId1`, { val: String(station.deviceId1), ack: true });
+
+        await this.setObjectNotExistsAsync(`${stationPrefix}.deviceId2`, {
+            type: 'state',
+            common: { name: 'Device ID (P2)', type: 'string', role: 'value', read: true, write: false },
+            native: {},
+        });
+        await this.setStateAsync(`${stationPrefix}.deviceId2`, { val: station.deviceId2 ? String(station.deviceId2) : '', ack: true });
 
         await this.setObjectNotExistsAsync(`${stationPrefix}.enabled`, {
             type: 'state',
@@ -77,12 +82,6 @@ class CptAdapter extends utils.Adapter {
             native: {},
         });
         await this.setStateAsync(`${stationPrefix}.enabled`, { val: !!station.enabled, ack: true });
-
-        await this.setObjectNotExistsAsync(`${stationPrefix}.status`, {
-            type: 'state',
-            common: { name: 'Status (Station)', type: 'string', role: 'value', read: true, write: false },
-            native: {},
-        });
 
         await this.setObjectNotExistsAsync(`${stationPrefix}.statusDerived`, {
             type: 'state',
@@ -189,30 +188,21 @@ class CptAdapter extends utils.Adapter {
         const rows = view?.rows || [];
         this.log.info(`Cleanup: gefundene channels unter stations.*: ${rows.length}`);
 
-        // 1) Delete station channels not in config (supports new and old structure)
+        // Delete station channels not in config: stations.<city>.<station>
         for (const row of rows) {
             const id = row.id;
-            const rel = id.substring(`${this.namespace}.`.length); // "stations.x" / "stations.city.station" / ...
+            const rel = id.substring(`${this.namespace}.`.length);
             const parts = rel.split('.');
 
-            // New structure station: stations.<city>.<station> (3 parts)
             if (parts.length === 3 && parts[0] === 'stations') {
                 if (!allowedStationChannels.has(id)) {
                     this.log.info(`Station nicht mehr in Config → lösche Objekte rekursiv: ${id}`);
                     await this.delObjectAsync(id, { recursive: true });
                 }
             }
-
-            // Old structure station: stations.<station> (2 parts) -> delete always (migration), unless still allowed (not possible now)
-            if (parts.length === 2 && parts[0] === 'stations') {
-                if (!allowedCityChannels.has(id)) { // old station channels won't be in allowed city set
-                    this.log.info(`Alte Struktur gefunden → lösche Objekte rekursiv: ${id}`);
-                    await this.delObjectAsync(id, { recursive: true });
-                }
-            }
         }
 
-        // 2) Delete city channels that are no longer used
+        // Delete city channels not used anymore: stations.<city>
         const view2 = await this.getObjectViewAsync('system', 'channel', { startkey, endkey });
         const rows2 = view2?.rows || [];
         for (const row of rows2) {
@@ -230,159 +220,185 @@ class CptAdapter extends utils.Adapter {
 
     async onReady() {
         this.log.info('Adapter CPT gestartet');
-        this.log.info('Konfiguration (this.config): ' + JSON.stringify(this.config));
+        this.log.info('Konfiguration: ' + JSON.stringify(this.config));
 
-        const stationsRaw = this.config.stations || [];
         const intervalMin = Number(this.config.interval) || 5;
 
-        const stations = (Array.isArray(stationsRaw) ? stationsRaw : [])
+        const stations = (Array.isArray(this.config.stations) ? this.config.stations : [])
             .filter((s) => s && typeof s === 'object')
-            .map((s, index) => {
-                const deviceId = s.deviceId ?? s.stationId ?? s.id;
-                const id = s.id || `station${index + 1}`;
-                const name = s.name || `station_${deviceId || id}`;
+            .map((s, idx) => {
+                const deviceId1 = s.deviceId1 ?? s.stationId ?? s.deviceId ?? s.id;
+                const deviceId2 = s.deviceId2 ?? null;
+                const name = s.name || `station_${deviceId1 || idx + 1}`;
                 const enabled = s.enabled !== false;
-                const city = (s.city || '').toString();
-                return { ...s, id, deviceId, name, enabled, city };
+                return {
+                    name,
+                    enabled,
+                    deviceId1: deviceId1 ? Number(deviceId1) : null,
+                    deviceId2: deviceId2 ? Number(deviceId2) : null,
+                };
             })
-            .filter((s) => {
-                if (!s.deviceId) {
-                    this.log.warn(`Station "${s.name || s.id}" ohne deviceId – überspringe: ${JSON.stringify(s)}`);
-                    return false;
-                }
-                return true;
-            });
+            .filter((s) => !!s.deviceId1);
 
         this.log.info(`Anzahl Stationen (gültig): ${stations.length}`);
         this.log.info(`Polling-Intervall: ${intervalMin} Minuten`);
 
-        const allowedStationChannels = new Set(
-            stations.map((s) => `${this.namespace}.${this.getStationChannelId(s)}`)
-        );
-        const allowedCityChannels = new Set(
-            stations.map((s) => `${this.namespace}.stations.${this.makeSafeName(this.getCityKey(s)) || 'unbekannt'}`)
-        );
+        // Cleanup uses last-known city keys from existing objects; allowed cities are unknown until we fetch.
+        // We'll do a two-step startup:
+        // 1) Fetch once to know cities and create the allowed sets
+        // 2) Cleanup + create objects + update
+        let initialDataByStation = [];
+        for (const st of stations) {
+            const data1 = await this.safeFetch(st.deviceId1);
+            const data2 = st.deviceId2 ? await this.safeFetch(st.deviceId2) : null;
+            initialDataByStation.push({ st, data1, data2 });
+        }
+
+        const allowedStationChannels = new Set();
+        const allowedCityChannels = new Set();
+
+        for (const item of initialDataByStation) {
+            const city = this.pickCity(item.data1, item.data2);
+            const cityKey = this.makeSafeName(city) || 'unbekannt';
+            const stationKey = this.getStationKey(item.st);
+            const stationPrefix = `stations.${cityKey}.${stationKey}`;
+            allowedStationChannels.add(`${this.namespace}.${stationPrefix}`);
+            allowedCityChannels.add(`${this.namespace}.stations.${cityKey}`);
+        }
 
         await this.cleanupRemovedStations(allowedStationChannels, allowedCityChannels);
 
         if (stations.length === 0) {
-            this.log.warn('Keine gültigen Stationen in der Konfiguration gefunden');
+            this.log.warn('Keine gültigen Stationen konfiguriert');
             return;
         }
 
-        // Create city + station objects
-        for (const station of stations) {
-            const cityName = this.getCityKey(station);
-            const cityKey = this.makeSafeName(cityName) || 'unbekannt';
+        // Ensure objects exist
+        for (const item of initialDataByStation) {
+            const st = item.st;
+            const city = this.pickCity(item.data1, item.data2);
+            const cityKey = this.makeSafeName(city) || 'unbekannt';
             const cityPrefix = `stations.${cityKey}`;
-            await this.ensureCityChannel(cityPrefix, cityName);
+            await this.ensureCityChannel(cityPrefix, city);
 
-            const stationPrefix = this.getStationChannelId(station);
-            await this.ensureStationObjects(stationPrefix, station);
-
-            const initialStatus = station.enabled ? 'initialisiert' : 'deaktiviert';
-            await this.setStateAsync(`${stationPrefix}.status`, { val: initialStatus, ack: true });
-            await this.setStateAsync(`${stationPrefix}.statusDerived`, { val: initialStatus, ack: true });
+            const stationKey = this.getStationKey(st);
+            const stationPrefix = `stations.${cityKey}.${stationKey}`;
+            await this.ensureStationObjects(stationPrefix, st);
             await this.setStateAsync(`${stationPrefix}.freePorts`, { val: 0, ack: true });
-            await this.setStateAsync(`${stationPrefix}.lastUpdate`, { val: new Date().toISOString(), ack: true });
         }
 
-        try {
-            await this.updateAllStations(stations);
-        } catch (e) {
-            this.log.error(`Fehler bei initialem Update: ${e?.message || e}`);
-        }
+        // First update
+        await this.updateAllStations(stations);
 
+        // Polling
         this.pollInterval = setInterval(() => {
             this.updateAllStations(stations).catch((e) => this.log.error(`Polling-Fehler: ${e?.message || e}`));
         }, intervalMin * 60 * 1000);
     }
 
-    async updateAllStations(stations) {
-        for (const station of stations) {
-            const stationPrefix = this.getStationChannelId(station);
+    async safeFetch(deviceId) {
+        try {
+            const url = `https://mc.chargepoint.com/map-prod/v3/station/info?deviceId=${deviceId}`;
+            this.log.debug(`GET ${url}`);
+            const res = await axios.get(url, { timeout: 12000 });
+            return res.data || {};
+        } catch (e) {
+            this.log.warn(`Fetch fehlgeschlagen für deviceId=${deviceId}: ${e?.message || e}`);
+            return null;
+        }
+    }
 
-            if (station.enabled === false) {
-                await this.setStateAsync(`${stationPrefix}.status`, { val: 'deaktiviert', ack: true });
+    buildLogicalPorts(data1, data2, hasSecondId) {
+        // If second ID exists: treat each ID as one "logical port" (take first port entry)
+        if (hasSecondId) {
+            const p1 = (data1?.portsInfo?.ports && data1.portsInfo.ports[0]) ? data1.portsInfo.ports[0] : {};
+            const p2 = (data2?.portsInfo?.ports && data2.portsInfo.ports[0]) ? data2.portsInfo.ports[0] : {};
+            return [
+                { ...p1, outletNumber: 1 },
+                { ...p2, outletNumber: 2 },
+            ];
+        }
+
+        // Otherwise: use ports from first response as-is
+        const ports = Array.isArray(data1?.portsInfo?.ports) ? data1.portsInfo.ports : [];
+        return ports;
+    }
+
+    async updateAllStations(stations) {
+        for (const st of stations) {
+            // Fetch needed data
+            const data1 = await this.safeFetch(st.deviceId1);
+            const data2 = st.deviceId2 ? await this.safeFetch(st.deviceId2) : null;
+
+            const city = this.pickCity(data1, data2);
+            const cityKey = this.makeSafeName(city) || 'unbekannt';
+            const stationKey = this.getStationKey(st);
+            const stationPrefix = `stations.${cityKey}.${stationKey}`;
+
+            // Ensure city + station channels exist (in case city changed)
+            await this.ensureCityChannel(`stations.${cityKey}`, city);
+            await this.ensureStationObjects(stationPrefix, st);
+
+            if (st.enabled === false) {
                 await this.setStateAsync(`${stationPrefix}.statusDerived`, { val: 'deaktiviert', ack: true });
+                await this.setStateAsync(`${stationPrefix}.portCount`, { val: 0, ack: true });
                 await this.setStateAsync(`${stationPrefix}.freePorts`, { val: 0, ack: true });
                 await this.setStateAsync(`${stationPrefix}.lastUpdate`, { val: new Date().toISOString(), ack: true });
                 continue;
             }
 
-            try {
-                const url = `https://mc.chargepoint.com/map-prod/v3/station/info?deviceId=${station.deviceId}`;
-                this.log.debug(`GET ${url}`);
+            const ports = this.buildLogicalPorts(data1, data2, !!st.deviceId2);
 
-                const res = await axios.get(url, { timeout: 12000 });
-                const data = res.data || {};
+            const portCount = st.deviceId2 ? 2 : ports.length;
+            const freePorts = ports.reduce((acc, p) => acc + (this.normalizeStatus(p?.statusV2 || p?.status) === 'available' ? 1 : 0), 0);
+            const derived = this.deriveStationStatusFromPorts(ports);
 
-                const stationStatus = data?.stationStatus || data?.status || 'unknown';
-                await this.setStateAsync(`${stationPrefix}.status`, { val: stationStatus, ack: true });
+            await this.setStateAsync(`${stationPrefix}.portCount`, { val: portCount, ack: true });
+            await this.setStateAsync(`${stationPrefix}.freePorts`, { val: freePorts, ack: true });
+            await this.setStateAsync(`${stationPrefix}.statusDerived`, { val: derived, ack: true });
 
-                const portsInfo = data?.portsInfo || {};
-                const ports = Array.isArray(portsInfo?.ports) ? portsInfo.ports : [];
-                const portCount = Number(portsInfo?.portCount ?? ports.length) || ports.length;
-                await this.setStateAsync(`${stationPrefix}.portCount`, { val: portCount, ack: true });
+            // Update each port
+            for (let i = 0; i < ports.length; i++) {
+                const port = ports[i] || {};
+                const outletNumber = port.outletNumber ?? (i + 1);
+                const portPrefix = await this.ensurePortObjects(stationPrefix, outletNumber);
 
-                const freePorts = ports.reduce((acc, p) => {
-                    const s = (p?.statusV2 || p?.status || '').toString().toLowerCase();
-                    return acc + (s === 'available' ? 1 : 0);
-                }, 0);
-                await this.setStateAsync(`${stationPrefix}.freePorts`, { val: freePorts, ack: true });
+                const pStatus = port.status || 'unknown';
+                const pStatusV2 = port.statusV2 || 'unknown';
+                const evseId = port.evseId ? String(port.evseId) : '';
 
-                const derived = this.deriveStationStatusFromPorts(ports);
-                await this.setStateAsync(`${stationPrefix}.statusDerived`, { val: derived, ack: true });
-
-                for (let i = 0; i < ports.length; i++) {
-                    const port = ports[i] || {};
-                    const outletNumber = port.outletNumber ?? port.outlet ?? (i + 1);
-
-                    const portPrefix = await this.ensurePortObjects(stationPrefix, outletNumber);
-
-                    const pStatus = port.status || 'unknown';
-                    const pStatusV2 = port.statusV2 || 'unknown';
-                    const evseId = port.evseId ? String(port.evseId) : '';
-
-                    let maxPowerKw = null;
-                    const prMax = port?.powerRange?.max;
-                    if (typeof prMax === 'number') {
-                        maxPowerKw = prMax;
-                    } else if (typeof prMax === 'string') {
-                        const parsed = Number(prMax);
-                        if (!Number.isNaN(parsed)) maxPowerKw = parsed;
-                    }
-
-                    const level = port.level ? String(port.level) : '';
-                    const displayLevel = port.displayLevel ? String(port.displayLevel) : '';
-
-                    const connector0 = Array.isArray(port.connectorList) && port.connectorList.length > 0 ? port.connectorList[0] : null;
-                    const plugType = connector0?.plugType ? String(connector0.plugType) : '';
-                    const displayPlugType = connector0?.displayPlugType ? String(connector0.displayPlugType) : '';
-
-                    await this.setStateAsync(`${portPrefix}.status`, { val: pStatus, ack: true });
-                    await this.setStateAsync(`${portPrefix}.statusV2`, { val: pStatusV2, ack: true });
-                    await this.setStateAsync(`${portPrefix}.evseId`, { val: evseId, ack: true });
-                    if (maxPowerKw !== null) {
-                        await this.setStateAsync(`${portPrefix}.maxPowerKw`, { val: maxPowerKw, ack: true });
-                    }
-                    await this.setStateAsync(`${portPrefix}.level`, { val: level, ack: true });
-                    await this.setStateAsync(`${portPrefix}.displayLevel`, { val: displayLevel, ack: true });
-                    await this.setStateAsync(`${portPrefix}.plugType`, { val: plugType, ack: true });
-                    await this.setStateAsync(`${portPrefix}.displayPlugType`, { val: displayPlugType, ack: true });
-                    await this.setStateAsync(`${portPrefix}.lastUpdate`, { val: new Date().toISOString(), ack: true });
+                let maxPowerKw = null;
+                const prMax = port?.powerRange?.max;
+                if (typeof prMax === 'number') {
+                    maxPowerKw = prMax;
+                } else if (typeof prMax === 'string') {
+                    const parsed = Number(prMax);
+                    if (!Number.isNaN(parsed)) maxPowerKw = parsed;
                 }
 
-                await this.setStateAsync(`${stationPrefix}.lastUpdate`, { val: new Date().toISOString(), ack: true });
+                const level = port.level ? String(port.level) : '';
+                const displayLevel = port.displayLevel ? String(port.displayLevel) : '';
 
-                this.log.info(`Aktualisiert: ${station.name} → freePorts=${freePorts}, ports=${ports.length}`);
-            } catch (err) {
-                const msg = err?.message || String(err);
-                this.log.error(`Fehler bei ${station.name || station.id}: ${msg}`);
-                await this.setStateAsync(`${stationPrefix}.status`, { val: 'Fehler', ack: true });
-                await this.setStateAsync(`${stationPrefix}.statusDerived`, { val: 'Fehler', ack: true });
-                await this.setStateAsync(`${stationPrefix}.lastUpdate`, { val: new Date().toISOString(), ack: true });
+                const connector0 = Array.isArray(port.connectorList) && port.connectorList.length > 0 ? port.connectorList[0] : null;
+                const plugType = connector0?.plugType ? String(connector0.plugType) : '';
+                const displayPlugType = connector0?.displayPlugType ? String(connector0.displayPlugType) : '';
+
+                await this.setStateAsync(`${portPrefix}.status`, { val: pStatus, ack: true });
+                await this.setStateAsync(`${portPrefix}.statusV2`, { val: pStatusV2, ack: true });
+                await this.setStateAsync(`${portPrefix}.evseId`, { val: evseId, ack: true });
+                if (maxPowerKw !== null) {
+                    await this.setStateAsync(`${portPrefix}.maxPowerKw`, { val: maxPowerKw, ack: true });
+                }
+                await this.setStateAsync(`${portPrefix}.level`, { val: level, ack: true });
+                await this.setStateAsync(`${portPrefix}.displayLevel`, { val: displayLevel, ack: true });
+                await this.setStateAsync(`${portPrefix}.plugType`, { val: plugType, ack: true });
+                await this.setStateAsync(`${portPrefix}.displayPlugType`, { val: displayPlugType, ack: true });
+                await this.setStateAsync(`${portPrefix}.lastUpdate`, { val: new Date().toISOString(), ack: true });
             }
+
+            await this.setStateAsync(`${stationPrefix}.lastUpdate`, { val: new Date().toISOString(), ack: true });
+
+            this.log.info(`Aktualisiert: ${st.name} → city=${city}, freePorts=${freePorts}, portCount=${portCount}, derived=${derived}`);
         }
     }
 

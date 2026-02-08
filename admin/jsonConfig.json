@@ -26,17 +26,8 @@
             "en": "Enabled",
             "de": "Aktiv"
           },
-          "width": 90,
+          "width": 80,
           "default": true
-        },
-        {
-          "type": "text",
-          "attr": "city",
-          "title": {
-            "en": "City / Location",
-            "de": "Ort"
-          },
-          "width": 180
         },
         {
           "type": "text",
@@ -45,25 +36,25 @@
             "en": "Name",
             "de": "Name"
           },
-          "width": 220
+          "width": 260
         },
         {
           "type": "number",
-          "attr": "deviceId",
+          "attr": "deviceId1",
           "title": {
-            "en": "Device ID",
-            "de": "Device ID"
+            "en": "Device ID (P1)",
+            "de": "Device ID (P1)"
           },
-          "width": 160
+          "width": 170
         },
         {
-          "type": "text",
-          "attr": "id",
+          "type": "number",
+          "attr": "deviceId2",
           "title": {
-            "en": "ID (internal)",
-            "de": "ID (intern)"
+            "en": "Device ID (P2, optional)",
+            "de": "Device ID (P2, optional)"
           },
-          "width": 140
+          "width": 190
         }
       ],
       "addRow": true,
