@@ -263,13 +263,7 @@ class CptAdapter extends utils.Adapter {
                     channelLabel: lbl || undefined,
                 };
             } else if (isPushover) {
-                payload = {
-                    message: text,
-                    user: u || undefined,
-                    device: u || undefined,
-                    title: 'ChargePoint',
-                    priority: 0
-                };
+                payload = { message: text, sound: '' };
             } else {
                 payload = {
                     text: text,
@@ -338,14 +332,8 @@ class CptAdapter extends utils.Adapter {
                         channelLabel: lbl || undefined,
                     };
                 } else if (isPushover) {
-                    payload = {
-                        message: 'CPT Test: Kommunikation OK ✅',
-                        user: u || undefined,
-                        device: u || undefined,
-                        title: 'ChargePoint',
-                        priority: 0
-                    };
-                } else {
+                payload = { message: 'CPT Test: Kommunikation OK ✅', sound: '' };
+            } else {
                     payload = {
                         text: 'CPT Test: Kommunikation OK ✅',
                         user: u || undefined,

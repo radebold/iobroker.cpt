@@ -89,8 +89,8 @@
         "_hint": {
           "type": "staticText",
           "text": {
-            "en": "Each row is one notification channel. Telegram: leave Recipient empty for default or set user alias. WhatsApp-CMB: enter phone number (+49...). Pushover: enter user key or device. Test per row.",
-            "de": "Jede Zeile ist ein Benachrichtigungskanal. Telegram: Empfänger leer lassen oder Alias eintragen. WhatsApp-CMB: Telefonnummer (+49...). Pushover: User-Key oder Device eintragen. Test pro Zeile."
+            "en": "Each row is one notification channel. Instance is a dropdown of enabled instances. Telegram: leave Recipient empty for default or set user alias. WhatsApp-CMB: Recipient is phone number (+49...). Pushover: Recipient is ignored (adapter config is used). Test per row.",
+            "de": "Jede Zeile ist ein Benachrichtigungskanal. „Adapter-Instanz“ ist ein Dropdown aller aktivierten Instanzen. Telegram: Empfänger leer (Default) oder Alias. WhatsApp-CMB: Empfänger = Telefonnummer (+49...). Pushover: Empfänger wird ignoriert (Einstellungen im Pushover-Adapter). Test pro Zeile."
           }
         },
         "channels": {
@@ -111,14 +111,15 @@
               "default": true
             },
             {
-              "type": "text",
+              "type": "instance",
               "attr": "instance",
               "title": {
                 "en": "Adapter instance",
                 "de": "Adapter-Instanz"
               },
-              "width": 170,
-              "placeholder": "telegram.0"
+              "width": 190,
+              "onlyEnabled": true,
+              "long": false
             },
             {
               "type": "text",
@@ -128,7 +129,9 @@
                 "de": "Empfänger"
               },
               "width": 170,
-              "placeholder": "+491726361044"
+              "placeholder": "+491726361044 / Thomas",
+              "disabled": "data.instance && data.instance.startsWith('pushover.')",
+              "hidden": false
             },
             {
               "type": "text",
