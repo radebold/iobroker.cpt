@@ -89,8 +89,8 @@
         "_hint": {
           "type": "staticText",
           "text": {
-            "en": "Add one or more channels. The adapter will send a standard text via sendTo(<instance>, 'send', {text, user}). 'User' can be chatId/user/phone depending on the adapter.",
-            "de": "Lege einen oder mehrere Kanäle an. Der Adapter sendet einen Standard-Text via sendTo(<Instanz>, 'send', {text, user}). 'User' kann je nach Adapter chatId/user/phone sein."
+            "en": "Each row is one notification channel. For telegram, put the Telegram user alias/name (as known by telegram adapter) into 'User'. Use Test per row.",
+            "de": "Jede Zeile ist ein Benachrichtigungskanal. Für telegram trägst du im Feld „User“ den User/Alias ein, den der telegram-Adapter kennt (z.B. „Thomas“). Test pro Zeile."
           }
         },
         "channels": {
@@ -124,11 +124,11 @@
               "type": "text",
               "attr": "user",
               "title": {
-                "en": "User/Chat/Phone",
-                "de": "User/Chat/Telefon"
+                "en": "User",
+                "de": "User"
               },
               "width": 170,
-              "placeholder": "123456789"
+              "placeholder": "Thomas"
             },
             {
               "type": "text",

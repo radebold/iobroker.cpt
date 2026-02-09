@@ -243,19 +243,22 @@ class CptAdapter extends utils.Adapter {
         let failed = 0;
 
         for (const ch of channels) {
-            const payload = {
-                text,
-                user: ch.user || undefined,
-                chatId: ch.user || undefined,
-                phone: ch.user || undefined,
-                title: 'ChargePoint',
-                city: ctx.city,
-                station: ctx.station,
-                freePorts: ctx.freePorts,
-                portCount: ctx.portCount,
-                status: ctx.status,
-                channelLabel: ch.label || undefined,
-            };
+            const isTelegram = ch.instance.startsWith('telegram.');
+            const payload = isTelegram
+                ? { text, user: ch.user || ch.label || undefined }
+                : {
+                    text,
+                    user: ch.user || undefined,
+                    chatId: ch.user || undefined,
+                    phone: ch.user || undefined,
+                    title: 'ChargePoint',
+                    city: ctx.city,
+                    station: ctx.station,
+                    freePorts: ctx.freePorts,
+                    portCount: ctx.portCount,
+                    status: ctx.status,
+                    channelLabel: ch.label || undefined,
+                };
             Object.keys(payload).forEach((k) => payload[k] === undefined && delete payload[k]);
 
             try {
@@ -289,14 +292,17 @@ class CptAdapter extends utils.Adapter {
             }
 
             try {
-                const payload = {
-                    text: 'CPT Test: Kommunikation OK ✅',
-                    user: user || undefined,
-                    chatId: user || undefined,
-                    phone: user || undefined,
-                    title: 'ChargePoint',
-                    channelLabel: label || undefined,
-                };
+                const isTelegram = instance.startsWith('telegram.');
+                const payload = isTelegram
+                    ? { text: 'CPT Test: Kommunikation OK ✅', user: user || label || undefined }
+                    : {
+                        text: 'CPT Test: Kommunikation OK ✅',
+                        user: user || undefined,
+                        chatId: user || undefined,
+                        phone: user || undefined,
+                        title: 'ChargePoint',
+                        channelLabel: label || undefined,
+                    };
                 Object.keys(payload).forEach((k) => payload[k] === undefined && delete payload[k]);
 
                 // Send to target notification adapter
