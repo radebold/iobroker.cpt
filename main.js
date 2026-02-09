@@ -11,6 +11,7 @@ class CptAdapter extends utils.Adapter {
 
         // cache last derived status per station for transition detection
         this.lastStatusByStation = {};
+        this.lastFreePortsByStation = {};
 
         this.on('message', this.onMessage.bind(this));
         this.on('ready', this.onReady.bind(this));
@@ -241,7 +242,13 @@ class CptAdapter extends utils.Adapter {
 
 
     async sendMessageToChannels(text, ctx = {}) {
-        const channels = this.getChannels();
+        let channels = [];
+        try {
+            channels = (typeof this.getChannels === 'function' ? this.getChannels() : []) || [];
+        } catch (e) {
+            this.log.warn(`getChannels() failed: ${e.message}`);
+            channels = [];
+        }
         if (channels.length === 0) {
             this.log.debug('Keine Kommunikationskanäle konfiguriert – Versand übersprungen');
             return { ok: 0, failed: 0, note: 'no_channels' };
@@ -618,6 +625,31 @@ class CptAdapter extends utils.Adapter {
             await this.setStateAsync(`${stationPrefix}.freePorts`, { val: freePorts, ack: true });
             await this.setStateAsync(`${stationPrefix}.statusDerived`, { val: derived, ack: true });
             this.lastStatusByStation[stationPrefix] = derived;
+
+            // Notify when station becomes available based on freePorts transition: 0 -> >0
+            const oldFreePorts = this.lastFreePortsByStation[stationPrefix];
+            this.lastFreePortsByStation[stationPrefix] = freePorts;
+
+            try {
+                const notify = await this.getStateAsync(`${stationPrefix}.notifyOnAvailable`);
+                const notifyEnabled = notify?.val === true;
+
+                const becameFree = oldFreePorts !== undefined && Number(oldFreePorts) === 0 && Number(freePorts) > 0;
+                if (notifyEnabled && becameFree) {
+                    await this.sendAvailableNotification({
+                        city,
+                        station: stationName,
+                        freePorts,
+                        portCount,
+                        status: derived,
+                        isTest: false,
+                    });
+                    this.log.info(`Notify trigger: ${stationName} (${city}) freePorts ${oldFreePorts} -> ${freePorts}`);
+                }
+            } catch (e) {
+                this.log.warn(`Notify check failed for ${stationPrefix}: ${e.message}`);
+            }
+
 
             for (let i = 0; i < ports.length; i++) {
                 const port = ports[i] || {};
