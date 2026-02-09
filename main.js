@@ -9,6 +9,7 @@ class CptAdapter extends utils.Adapter {
 
         this.pollInterval = null;
 
+        this.on('message', this.onMessage.bind(this));
         this.on('ready', this.onReady.bind(this));
         this.on('stateChange', this.onStateChange.bind(this));
         this.on('unload', this.onUnload.bind(this));
@@ -274,6 +275,48 @@ class CptAdapter extends utils.Adapter {
         const text = `Ladestation ${ctx.station} ist nun frei`;
         return this.sendMessageToChannels(text, ctx);
     }
+    async onMessage(obj) {
+        if (!obj) return;
+
+        if (obj.command === 'testChannel') {
+            const instance = (obj.message?.instance || '').toString().trim();
+            const user = (obj.message?.user || '').toString().trim();
+            const label = (obj.message?.label || '').toString().trim();
+
+            if (!instance) {
+                obj.callback && this.sendTo(obj.from, obj.command, { error: 'Kein Adapter-Instanz gesetzt' }, obj.callback);
+                return;
+            }
+
+            try {
+                const payload = {
+                    text: 'CPT Test: Kommunikation OK ✅',
+                    user: user || undefined,
+                    chatId: user || undefined,
+                    phone: user || undefined,
+                    title: 'ChargePoint',
+                    channelLabel: label || undefined,
+                };
+                Object.keys(payload).forEach((k) => payload[k] === undefined && delete payload[k]);
+
+                // Send to target notification adapter
+                this.sendTo(instance, 'send', payload);
+
+                // Reply to admin UI (toast)
+                obj.callback && this.sendTo(
+                    obj.from,
+                    obj.command,
+                    { data: { result: `Test an ${instance} gesendet${user ? ' (' + user + ')' : ''}` } },
+                    obj.callback
+                );
+            } catch (e) {
+                obj.callback && this.sendTo(obj.from, obj.command, { error: e.message }, obj.callback);
+            }
+            return;
+        }
+    }
+
+
 
     async onReady() {
         this.log.info('Adapter CPT gestartet');

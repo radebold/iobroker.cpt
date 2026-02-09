@@ -1,7 +1,7 @@
 {
   "common": {
     "name": "cpt",
-    "version": "0.2.4-beta.3",
+    "version": "0.2.4-beta.4",
     "title": "CPT ChargePoint",
     "titleLang": {
       "en": "CPT ChargePoint",
@@ -35,7 +35,8 @@
     "materializeTab": true,
     "adminUI": {
       "config": "json"
-    }
+    },
+    "messagebox": true
   },
   "native": {
     "interval": 5,

@@ -139,10 +139,24 @@
               },
               "width": 200,
               "placeholder": "Privat / Familie"
+            },
+            {
+              "type": "sendTo",
+              "attr": "_test",
+              "title": {
+                "en": "Test",
+                "de": "Test"
+              },
+              "width": 90,
+              "variant": "contained",
+              "icon": "send",
+              "command": "testChannel",
+              "jsonData": "{\"instance\":\"${data.instance}\",\"user\":\"${data.user}\",\"label\":\"${data.label}\"}"
             }
           ],
           "addRow": true,
-          "deleteRow": true
+          "deleteRow": true,
+          "compact": true
         }
       }
     }
