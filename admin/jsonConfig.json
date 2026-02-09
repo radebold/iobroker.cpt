@@ -89,8 +89,8 @@
         "_hint": {
           "type": "staticText",
           "text": {
-            "en": "Each row is one notification channel. Choose adapter (Telegram / WhatsApp-CMB / Pushover) and instance number. Telegram: Recipient optional (alias). WhatsApp-CMB: Recipient is phone number (+49...). Pushover: Recipient is ignored (adapter config is used). Test per row.",
-            "de": "Jede Zeile ist ein Benachrichtigungskanal. Wähle Adapter (Telegram / WhatsApp-CMB / Pushover) und Instanznummer. Telegram: Empfänger optional (Alias). WhatsApp-CMB: Empfänger = Telefonnummer (+49...). Pushover: Empfänger wird ignoriert (Einstellungen im Pushover-Adapter). Test pro Zeile."
+            "en": "Pick an enabled instance. Tip: type 'telegram', 'whatsapp-cmb' or 'pushover' in the dropdown to filter quickly. Other instances will be ignored by the adapter.",
+            "de": "Wähle eine aktivierte Instanz. Tipp: im Dropdown einfach 'telegram', 'whatsapp-cmb' oder 'pushover' tippen, dann filtert die Liste sofort. Andere Instanzen werden vom Adapter ignoriert."
           }
         },
         "channels": {
@@ -111,26 +111,15 @@
               "default": true
             },
             {
-              "type": "adapter",
-              "attr": "adapter",
+              "type": "instance",
+              "attr": "instance",
               "title": {
-                "en": "Adapter",
-                "de": "Adapter"
+                "en": "Adapter instance",
+                "de": "Adapter-Instanz"
               },
+              "width": 220,
               "onlyEnabled": true,
-              "filter": "^(telegram|whatsapp-cmb|pushover)$",
-              "width": 170
-            },
-            {
-              "type": "number",
-              "attr": "instanceNr",
-              "title": {
-                "en": "Inst",
-                "de": "Inst"
-              },
-              "min": 0,
-              "default": 0,
-              "width": 70
+              "long": false
             },
             {
               "type": "text",
@@ -140,8 +129,8 @@
                 "de": "Empfänger"
               },
               "width": 170,
-              "placeholder": "+491726361044 / Thomas",
-              "disabled": "data.adapter === 'pushover'",
+              "placeholder": "+4917... / Thomas",
+              "disabled": "data.instance && data.instance.startsWith('pushover.')",
               "hidden": false
             },
             {
@@ -165,7 +154,7 @@
               "variant": "contained",
               "icon": "send",
               "command": "testChannel",
-              "jsonData": "{\"adapter\":\"${data.adapter}\",\"instanceNr\":\"${data.instanceNr}\",\"user\":\"${data.user}\",\"label\":\"${data.label}\"}"
+              "jsonData": "{\"instance\":\"${data.instance}\",\"user\":\"${data.user}\",\"label\":\"${data.label}\"}"
             }
           ],
           "addRow": true,

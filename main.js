@@ -223,26 +223,17 @@ class CptAdapter extends utils.Adapter {
     getChannels() {
         const channels = Array.isArray(this.config.channels) ? this.config.channels : [];
         return channels
-            .filter((c) => c && c.enabled !== false)
-            .map((c) => {
-                // Backward compatibility: if "instance" is set, use it; otherwise build from adapter + instanceNr
-                let instance = c.instance !== undefined && c.instance !== null ? String(c.instance).trim() : '';
-                const adapter = c.adapter !== undefined && c.adapter !== null ? String(c.adapter).trim() : '';
-                const instanceNr = c.instanceNr !== undefined && c.instanceNr !== null ? Number(c.instanceNr) : 0;
-
-                if (!instance && adapter) {
-                    instance = `${adapter}.${Number.isFinite(instanceNr) ? instanceNr : 0}`;
-                }
-
-                return {
-                    instance,
-                    adapter,
-                    instanceNr: Number.isFinite(instanceNr) ? instanceNr : 0,
-                    user: c.user !== undefined && c.user !== null ? String(c.user).trim() : '',
-                    label: c.label !== undefined && c.label !== null ? String(c.label).trim() : '',
-                };
-            })
-            .filter((c) => c.instance && c.instance.length > 0);
+            .filter((c) => c && c.enabled !== false && c.instance)
+            .map((c) => ({
+                instance: String(c.instance).trim(),
+                user: c.user !== undefined && c.user !== null ? String(c.user).trim() : '',
+                label: c.label !== undefined && c.label !== null ? String(c.label).trim() : '',
+            }))
+            .filter((c) => {
+                const ok = c.instance.startsWith('telegram.') || c.instance.startsWith('whatsapp-cmb.') || c.instance.startsWith('pushover.');
+                if (!ok) this.log.warn(`Kommunikations-Instanz wird ignoriert (nicht erlaubt): ${c.instance}`);
+                return ok;
+            });
     }
 
 
@@ -257,21 +248,22 @@ class CptAdapter extends utils.Adapter {
         let failed = 0;
 
         for (const ch of channels) {
-                                    const inst = ch.instance;
+            const inst = ch.instance;
             const u = ch.user;
             const lbl = ch.label;
             const isTelegram = inst.startsWith('telegram.');
             const isWhatsAppCmb = inst.startsWith('whatsapp-cmb.');
             const isPushover = inst.startsWith('pushover.');
+
             let payload;
             if (isTelegram) {
-                payload = { text: text, ...(u ? { user: u } : {}) };
+                payload = { text, ...(u ? { user: u } : {}) };
             } else if (isWhatsAppCmb) {
                 payload = {
                     phone: u || undefined,
                     number: u || undefined,
                     to: u || undefined,
-                    text: text,
+                    text,
                     message: text,
                     title: 'ChargePoint',
                     channelLabel: lbl || undefined,
@@ -279,16 +271,18 @@ class CptAdapter extends utils.Adapter {
             } else if (isPushover) {
                 payload = { message: text, sound: '' };
             } else {
-                payload = {
-                    text: text,
-                    user: u || undefined,
-                    chatId: u || undefined,
-                    phone: u || undefined,
-                    title: 'ChargePoint',
-                    channelLabel: lbl || undefined,
-                };
+                payload = { text };
             }
+
+            if (!payload.city && ctx && ctx.city) payload.city = ctx.city;
+            if (!payload.station && ctx && ctx.station) payload.station = ctx.station;
+            if (payload.freePorts === undefined && ctx && ctx.freePorts !== undefined) payload.freePorts = ctx.freePorts;
+            if (payload.portCount === undefined && ctx && ctx.portCount !== undefined) payload.portCount = ctx.portCount;
+            if (!payload.status && ctx && ctx.status) payload.status = ctx.status;
+
             Object.keys(payload).forEach((k) => payload[k] === undefined && delete payload[k]);
+
+
 
             try {
                 if (!payload.city && ctx && ctx.city) payload.city = ctx.city;
@@ -316,9 +310,7 @@ class CptAdapter extends utils.Adapter {
         if (!obj) return;
 
         if (obj.command === 'testChannel') {
-            const adapter = (obj.message?.adapter || '').toString().trim();
-            const instanceNr = obj.message?.instanceNr !== undefined ? Number(obj.message.instanceNr) : 0;
-            const instance = adapter ? `${adapter}.${Number.isFinite(instanceNr) ? instanceNr : 0}` : (obj.message?.instance || '').toString().trim();
+            const instance = (obj.message?.instance || '').toString().trim();
             const user = (obj.message?.user || '').toString().trim();
             const label = (obj.message?.label || '').toString().trim();
 
