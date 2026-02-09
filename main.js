@@ -306,7 +306,8 @@ class CptAdapter extends utils.Adapter {
     }
 
     async sendAvailableNotification(ctx) {
-        const text = `Ladestation ${ctx.station} ist nun frei`;
+        const prefix = ctx.isTest ? 'TEST: ' : '';
+        const text = `${prefix}Ladestation ${ctx.station} in ${ctx.city} ist nun frei${ctx.freePorts !== undefined && ctx.portCount !== undefined ? ` (${ctx.freePorts}/${ctx.portCount})` : ''}`;
         return this.sendMessageToChannels(text, ctx);
     }
     async onMessage(obj) {
@@ -456,7 +457,7 @@ class CptAdapter extends utils.Adapter {
     async onStateChange(id, state) {
         if (!state || state.ack) return;
         // STATUS_DERIVED_MANUAL: allow manual testing from scripts (ack=false)
-        // If statusDerived changes from non-available -> available and notify flag is true, send notification.
+        // If statusDerived changes to "available" and notify flag is true, send a TEST notification.
         const mStatus = id.match(new RegExp('^' + this.namespace.replace('.', '\\.') + '\\.stations\\.(.+?)\\.(.+?)\\.statusDerived$'));
         if (mStatus) {
             const cityKey = mStatus[1];
@@ -473,21 +474,27 @@ class CptAdapter extends utils.Adapter {
                 const notify = await this.getStateAsync(`${stationPrefix}.notifyOnAvailable`);
                 const notifyEnabled = notify?.val === true;
 
-                if (notifyEnabled && oldStatus !== undefined && oldStatus !== 'available' && newStatus === 'available') {
+                const wasAvailable = oldStatus === 'available';
+                if (notifyEnabled && !wasAvailable && newStatus === 'available') {
                     const cityObj = await this.getObjectAsync(`stations.${cityKey}`);
                     const cityName = cityObj?.common?.name || cityKey;
 
                     const fp = await this.getStateAsync(`${stationPrefix}.freePorts`);
                     const pc = await this.getStateAsync(`${stationPrefix}.portCount`);
 
+                    const freePorts = fp?.val !== undefined && fp?.val !== null ? Number(fp.val) : undefined;
+                    const portCount = pc?.val !== undefined && pc?.val !== null ? Number(pc.val) : undefined;
+
                     await this.sendAvailableNotification({
                         city: cityName,
                         station: stationKey,
-                        freePorts: fp?.val,
-                        portCount: pc?.val,
+                        freePorts,
+                        portCount,
                         status: newStatus,
+                        isTest: true,
                     });
-                    this.log.info(`Manual notify trigger: ${stationPrefix} ${oldStatus} -> ${newStatus}`);
+
+                    this.log.info(`Manual notify trigger (TEST): ${stationPrefix} ${oldStatus} -> ${newStatus}`);
                 } else {
                     this.log.debug(`Manual statusDerived change ignored: ${stationPrefix} ${oldStatus} -> ${newStatus} (notify=${notifyEnabled})`);
                 }
@@ -496,6 +503,7 @@ class CptAdapter extends utils.Adapter {
             }
             return;
         }
+
 
 
         if (id === `${this.namespace}.tools.export` && state.val === true) {
