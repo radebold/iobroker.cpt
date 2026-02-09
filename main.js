@@ -48,11 +48,7 @@ class CptAdapter extends utils.Adapter {
     }
 
     async ensureCityChannel(cityPrefix, cityName) {
-        await this.setObjectNotExistsAsync(cityPrefix, {
-            type: 'channel',
-            common: { name: cityName },
-            native: {},
-        });
+        await this.setObjectNotExistsAsync(cityPrefix, { type: 'channel', common: { name: cityName }, native: {} });
     }
 
     async ensureToolsObjects() {
@@ -82,18 +78,44 @@ class CptAdapter extends utils.Adapter {
             native: {},
         });
 
+        // NEW: Test communication button + result
+        await this.setObjectNotExistsAsync('tools.testNotify', {
+            type: 'state',
+            common: { name: 'Kommunikation testen (Trigger)', type: 'boolean', role: 'button', read: true, write: true, def: false },
+            native: {},
+        });
+
+        await this.setObjectNotExistsAsync('tools.lastTest', {
+            type: 'state',
+            common: { name: 'Letzter Test', type: 'string', role: 'date', read: true, write: false },
+            native: {},
+        });
+
+        await this.setObjectNotExistsAsync('tools.lastTestResult', {
+            type: 'state',
+            common: { name: 'Letztes Testergebnis', type: 'string', role: 'text', read: true, write: false },
+            native: {},
+        });
+
         await this.setStateAsync('tools.export', { val: false, ack: true });
+        await this.setStateAsync('tools.testNotify', { val: false, ack: true });
     }
 
     async ensureStationObjects(stationPrefix, station) {
         await this.setObjectNotExistsAsync(stationPrefix, { type: 'channel', common: { name: station.name }, native: {} });
 
-        const ro = (name) => ({ name, type: 'string', role: 'value', read: true, write: false });
-
-        await this.setObjectNotExistsAsync(`${stationPrefix}.deviceId1`, { type: 'state', common: ro('Device ID (P1)'), native: {} });
+        await this.setObjectNotExistsAsync(`${stationPrefix}.deviceId1`, {
+            type: 'state',
+            common: { name: 'Device ID (P1)', type: 'string', role: 'value', read: true, write: false },
+            native: {},
+        });
         await this.setStateAsync(`${stationPrefix}.deviceId1`, { val: String(station.deviceId1), ack: true });
 
-        await this.setObjectNotExistsAsync(`${stationPrefix}.deviceId2`, { type: 'state', common: ro('Device ID (P2)'), native: {} });
+        await this.setObjectNotExistsAsync(`${stationPrefix}.deviceId2`, {
+            type: 'state',
+            common: { name: 'Device ID (P2)', type: 'string', role: 'value', read: true, write: false },
+            native: {},
+        });
         await this.setStateAsync(`${stationPrefix}.deviceId2`, { val: station.deviceId2 ? String(station.deviceId2) : '', ack: true });
 
         await this.setObjectNotExistsAsync(`${stationPrefix}.enabled`, {
@@ -143,7 +165,6 @@ class CptAdapter extends utils.Adapter {
 
     async ensurePortObjects(stationPrefix, outletNumber) {
         const portPrefix = `${stationPrefix}.ports.${outletNumber}`;
-
         await this.setObjectNotExistsAsync(portPrefix, { type: 'channel', common: { name: `Port ${outletNumber}` }, native: {} });
 
         const states = [
@@ -161,7 +182,6 @@ class CptAdapter extends utils.Adapter {
         for (const [id, common] of states) {
             await this.setObjectNotExistsAsync(`${portPrefix}.${id}`, { type: 'state', common: { read: true, write: false, ...common }, native: {} });
         }
-
         return portPrefix;
     }
 
@@ -176,7 +196,6 @@ class CptAdapter extends utils.Adapter {
             const id = row.id;
             const rel = id.substring(`${this.namespace}.`.length);
             const parts = rel.split('.');
-
             if (parts.length === 3 && parts[0] === 'stations') {
                 if (!allowedStationChannels.has(id)) {
                     this.log.info(`Station nicht mehr in Config → lösche Objekte rekursiv: ${id}`);
@@ -212,43 +231,48 @@ class CptAdapter extends utils.Adapter {
             .filter((c) => c.instance.length > 0);
     }
 
-    async sendAvailableNotification(ctx) {
+    async sendMessageToChannels(text, ctx = {}) {
         const channels = this.getChannels();
         if (channels.length === 0) {
-            this.log.debug(`Keine Kommunikationskanäle konfiguriert – Notification übersprungen für ${ctx.station}`);
-            return;
+            this.log.debug('Keine Kommunikationskanäle konfiguriert – Versand übersprungen');
+            return { ok: 0, failed: 0, note: 'no_channels' };
         }
 
-        // Standard-Text (wie gewünscht)
-        const text = `Ladestation ${ctx.station} ist nun frei`;
+        let ok = 0;
+        let failed = 0;
 
         for (const ch of channels) {
-            // Always use command "send" internally (user doesn't need to configure it)
             const payload = {
                 text,
-                // For compatibility, provide multiple common keys
                 user: ch.user || undefined,
                 chatId: ch.user || undefined,
                 phone: ch.user || undefined,
                 title: 'ChargePoint',
-                // Add some optional context fields
                 city: ctx.city,
                 station: ctx.station,
                 freePorts: ctx.freePorts,
                 portCount: ctx.portCount,
                 status: ctx.status,
+                channelLabel: ch.label || undefined,
             };
-
-            // Remove undefined keys for cleaner payload
             Object.keys(payload).forEach((k) => payload[k] === undefined && delete payload[k]);
 
             try {
                 this.sendTo(ch.instance, 'send', payload);
-                this.log.info(`Notification gesendet über ${ch.instance} (${ch.label || 'Channel'}) für ${ctx.city} / ${ctx.station}`);
+                ok++;
+                this.log.info(`Message gesendet über ${ch.instance} (${ch.label || 'Channel'})`);
             } catch (e) {
+                failed++;
                 this.log.warn(`sendTo fehlgeschlagen (${ch.instance}): ${e.message}`);
             }
         }
+
+        return { ok, failed, note: 'sent' };
+    }
+
+    async sendAvailableNotification(ctx) {
+        const text = `Ladestation ${ctx.station} ist nun frei`;
+        return this.sendMessageToChannels(text, ctx);
     }
 
     async onReady() {
@@ -257,6 +281,7 @@ class CptAdapter extends utils.Adapter {
 
         await this.ensureToolsObjects();
         this.subscribeStates('tools.export');
+        this.subscribeStates('tools.testNotify');
         this.subscribeStates('stations.*.*.notifyOnAvailable');
 
         const intervalMin = Number(this.config.interval) || 5;
@@ -333,6 +358,16 @@ class CptAdapter extends utils.Adapter {
         if (id === `${this.namespace}.tools.export` && state.val === true) {
             await this.doExportStations();
             await this.setStateAsync('tools.export', { val: false, ack: true });
+            return;
+        }
+
+        if (id === `${this.namespace}.tools.testNotify` && state.val === true) {
+            const now = new Date().toISOString();
+            const res = await this.sendMessageToChannels('CPT Test: Kommunikation OK ✅');
+            await this.setStateAsync('tools.lastTest', { val: now, ack: true });
+            await this.setStateAsync('tools.lastTestResult', { val: `ok=${res.ok}, failed=${res.failed}`, ack: true });
+            await this.setStateAsync('tools.testNotify', { val: false, ack: true });
+            return;
         }
     }
 
@@ -371,7 +406,6 @@ class CptAdapter extends utils.Adapter {
         }
 
         await this.setStateAsync('tools.lastExport', { val: new Date().toISOString(), ack: true });
-
         this.log.info(`Export erstellt: ${stations.length} Station(en)`);
     }
 
