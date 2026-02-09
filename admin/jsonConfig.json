@@ -89,8 +89,8 @@
         "_hint": {
           "type": "staticText",
           "text": {
-            "en": "Each row is one notification channel. Instance is a dropdown of enabled instances. Telegram: leave Recipient empty for default or set user alias. WhatsApp-CMB: Recipient is phone number (+49...). Pushover: Recipient is ignored (adapter config is used). Test per row.",
-            "de": "Jede Zeile ist ein Benachrichtigungskanal. „Adapter-Instanz“ ist ein Dropdown aller aktivierten Instanzen. Telegram: Empfänger leer (Default) oder Alias. WhatsApp-CMB: Empfänger = Telefonnummer (+49...). Pushover: Empfänger wird ignoriert (Einstellungen im Pushover-Adapter). Test pro Zeile."
+            "en": "Choose a communication adapter instance (Telegram, WhatsApp-CMB or Pushover only). Telegram: leave Recipient empty or set alias. WhatsApp-CMB: Recipient is phone number (+49...). Pushover: Recipient is ignored.",
+            "de": "Wähle eine Kommunikations-Adapter-Instanz (nur Telegram, WhatsApp-CMB oder Pushover). Telegram: Empfänger leer oder Alias. WhatsApp-CMB: Empfänger = Telefonnummer (+49...). Pushover: Empfänger wird ignoriert."
           }
         },
         "channels": {
@@ -117,9 +117,10 @@
                 "en": "Adapter instance",
                 "de": "Adapter-Instanz"
               },
-              "width": 190,
+              "width": 200,
               "onlyEnabled": true,
-              "long": false
+              "long": false,
+              "filter": "^(telegram|whatsapp-cmb|pushover)\\."
             },
             {
               "type": "text",
