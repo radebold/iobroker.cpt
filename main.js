@@ -9,6 +9,9 @@ class CptAdapter extends utils.Adapter {
 
         this.pollInterval = null;
 
+        // cache last derived status per station for transition detection
+        this.lastStatusByStation = {};
+
         this.on('message', this.onMessage.bind(this));
         this.on('ready', this.onReady.bind(this));
         this.on('stateChange', this.onStateChange.bind(this));
@@ -380,6 +383,7 @@ class CptAdapter extends utils.Adapter {
         this.subscribeStates('tools.export');
         this.subscribeStates('tools.testNotify');
         this.subscribeStates('stations.*.*.notifyOnAvailable');
+        this.subscribeStates('stations.*.*.statusDerived');
 
         const intervalMin = Number(this.config.interval) || 5;
 
@@ -451,6 +455,48 @@ class CptAdapter extends utils.Adapter {
 
     async onStateChange(id, state) {
         if (!state || state.ack) return;
+        // STATUS_DERIVED_MANUAL: allow manual testing from scripts (ack=false)
+        // If statusDerived changes from non-available -> available and notify flag is true, send notification.
+        const mStatus = id.match(new RegExp('^' + this.namespace.replace('.', '\\.') + '\\.stations\\.(.+?)\\.(.+?)\\.statusDerived$'));
+        if (mStatus) {
+            const cityKey = mStatus[1];
+            const stationKey = mStatus[2];
+            const stationPrefix = `stations.${cityKey}.${stationKey}`;
+
+            const newStatus = (state.val ?? '').toString();
+            const oldStatus = this.lastStatusByStation[stationPrefix];
+
+            // update cache immediately
+            this.lastStatusByStation[stationPrefix] = newStatus;
+
+            try {
+                const notify = await this.getStateAsync(`${stationPrefix}.notifyOnAvailable`);
+                const notifyEnabled = notify?.val === true;
+
+                if (notifyEnabled && oldStatus !== undefined && oldStatus !== 'available' && newStatus === 'available') {
+                    const cityObj = await this.getObjectAsync(`stations.${cityKey}`);
+                    const cityName = cityObj?.common?.name || cityKey;
+
+                    const fp = await this.getStateAsync(`${stationPrefix}.freePorts`);
+                    const pc = await this.getStateAsync(`${stationPrefix}.portCount`);
+
+                    await this.sendAvailableNotification({
+                        city: cityName,
+                        station: stationKey,
+                        freePorts: fp?.val,
+                        portCount: pc?.val,
+                        status: newStatus,
+                    });
+                    this.log.info(`Manual notify trigger: ${stationPrefix} ${oldStatus} -> ${newStatus}`);
+                } else {
+                    this.log.debug(`Manual statusDerived change ignored: ${stationPrefix} ${oldStatus} -> ${newStatus} (notify=${notifyEnabled})`);
+                }
+            } catch (e) {
+                this.log.warn(`Manual statusDerived notify check failed for ${stationPrefix}: ${e.message}`);
+            }
+            return;
+        }
+
 
         if (id === `${this.namespace}.tools.export` && state.val === true) {
             await this.doExportStations();
@@ -563,6 +609,7 @@ class CptAdapter extends utils.Adapter {
             await this.setStateAsync(`${stationPrefix}.portCount`, { val: portCount, ack: true });
             await this.setStateAsync(`${stationPrefix}.freePorts`, { val: freePorts, ack: true });
             await this.setStateAsync(`${stationPrefix}.statusDerived`, { val: derived, ack: true });
+            this.lastStatusByStation[stationPrefix] = derived;
 
             for (let i = 0; i < ports.length; i++) {
                 const port = ports[i] || {};
