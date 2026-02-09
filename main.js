@@ -223,14 +223,28 @@ class CptAdapter extends utils.Adapter {
     getChannels() {
         const channels = Array.isArray(this.config.channels) ? this.config.channels : [];
         return channels
-            .filter((c) => c && c.enabled !== false && c.instance)
-            .map((c) => ({
-                instance: String(c.instance).trim(),
-                user: c.user !== undefined && c.user !== null ? String(c.user).trim() : '',
-                label: c.label !== undefined && c.label !== null ? String(c.label).trim() : '',
-            }))
-            .filter((c) => c.instance.length > 0);
+            .filter((c) => c && c.enabled !== false)
+            .map((c) => {
+                // Backward compatibility: if "instance" is set, use it; otherwise build from adapter + instanceNr
+                let instance = c.instance !== undefined && c.instance !== null ? String(c.instance).trim() : '';
+                const adapter = c.adapter !== undefined && c.adapter !== null ? String(c.adapter).trim() : '';
+                const instanceNr = c.instanceNr !== undefined && c.instanceNr !== null ? Number(c.instanceNr) : 0;
+
+                if (!instance && adapter) {
+                    instance = `${adapter}.${Number.isFinite(instanceNr) ? instanceNr : 0}`;
+                }
+
+                return {
+                    instance,
+                    adapter,
+                    instanceNr: Number.isFinite(instanceNr) ? instanceNr : 0,
+                    user: c.user !== undefined && c.user !== null ? String(c.user).trim() : '',
+                    label: c.label !== undefined && c.label !== null ? String(c.label).trim() : '',
+                };
+            })
+            .filter((c) => c.instance && c.instance.length > 0);
     }
+
 
     async sendMessageToChannels(text, ctx = {}) {
         const channels = this.getChannels();
@@ -302,7 +316,9 @@ class CptAdapter extends utils.Adapter {
         if (!obj) return;
 
         if (obj.command === 'testChannel') {
-            const instance = (obj.message?.instance || '').toString().trim();
+            const adapter = (obj.message?.adapter || '').toString().trim();
+            const instanceNr = obj.message?.instanceNr !== undefined ? Number(obj.message.instanceNr) : 0;
+            const instance = adapter ? `${adapter}.${Number.isFinite(instanceNr) ? instanceNr : 0}` : (obj.message?.instance || '').toString().trim();
             const user = (obj.message?.user || '').toString().trim();
             const label = (obj.message?.label || '').toString().trim();
 
