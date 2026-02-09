@@ -243,25 +243,51 @@ class CptAdapter extends utils.Adapter {
         let failed = 0;
 
         for (const ch of channels) {
-            const isTelegram = ch.instance.startsWith('telegram.');
-            const payload = isTelegram
-                ? { text, user: ch.user || ch.label || undefined }
-                : {
-                    text,
-                    user: ch.user || undefined,
-                    chatId: ch.user || undefined,
-                    phone: ch.user || undefined,
+                                    const inst = ch.instance;
+            const u = ch.user;
+            const lbl = ch.label;
+            const isTelegram = inst.startsWith('telegram.');
+            const isWhatsAppCmb = inst.startsWith('whatsapp-cmb.');
+            const isPushover = inst.startsWith('pushover.');
+            let payload;
+            if (isTelegram) {
+                payload = { text: text, ...(u ? { user: u } : {}) };
+            } else if (isWhatsAppCmb) {
+                payload = {
+                    phone: u || undefined,
+                    number: u || undefined,
+                    to: u || undefined,
+                    text: text,
+                    message: text,
                     title: 'ChargePoint',
-                    city: ctx.city,
-                    station: ctx.station,
-                    freePorts: ctx.freePorts,
-                    portCount: ctx.portCount,
-                    status: ctx.status,
-                    channelLabel: ch.label || undefined,
+                    channelLabel: lbl || undefined,
                 };
+            } else if (isPushover) {
+                payload = {
+                    message: text,
+                    user: u || undefined,
+                    device: u || undefined,
+                    title: 'ChargePoint',
+                    priority: 0
+                };
+            } else {
+                payload = {
+                    text: text,
+                    user: u || undefined,
+                    chatId: u || undefined,
+                    phone: u || undefined,
+                    title: 'ChargePoint',
+                    channelLabel: lbl || undefined,
+                };
+            }
             Object.keys(payload).forEach((k) => payload[k] === undefined && delete payload[k]);
 
             try {
+                if (!payload.city && ctx && ctx.city) payload.city = ctx.city;
+                if (!payload.station && ctx && ctx.station) payload.station = ctx.station;
+                if (payload.freePorts === undefined && ctx && ctx.freePorts !== undefined) payload.freePorts = ctx.freePorts;
+                if (payload.portCount === undefined && ctx && ctx.portCount !== undefined) payload.portCount = ctx.portCount;
+                if (!payload.status && ctx && ctx.status) payload.status = ctx.status;
                 this.sendTo(ch.instance, 'send', payload);
                 ok++;
                 this.log.info(`Message gesendet über ${ch.instance} (${ch.label || 'Channel'})`);
@@ -292,17 +318,43 @@ class CptAdapter extends utils.Adapter {
             }
 
             try {
-                const isTelegram = instance.startsWith('telegram.');
-                const payload = isTelegram
-                    ? { text: 'CPT Test: Kommunikation OK ✅', user: user || label || undefined }
-                    : {
+                                                const inst = instance;
+                const u = user;
+                const lbl = label;
+                const isTelegram = inst.startsWith('telegram.');
+                const isWhatsAppCmb = inst.startsWith('whatsapp-cmb.');
+                const isPushover = inst.startsWith('pushover.');
+                let payload;
+                if (isTelegram) {
+                    payload = { text: 'CPT Test: Kommunikation OK ✅', ...(u ? { user: u } : {}) };
+                } else if (isWhatsAppCmb) {
+                    payload = {
+                        phone: u || undefined,
+                        number: u || undefined,
+                        to: u || undefined,
                         text: 'CPT Test: Kommunikation OK ✅',
-                        user: user || undefined,
-                        chatId: user || undefined,
-                        phone: user || undefined,
+                        message: 'CPT Test: Kommunikation OK ✅',
                         title: 'ChargePoint',
-                        channelLabel: label || undefined,
+                        channelLabel: lbl || undefined,
                     };
+                } else if (isPushover) {
+                    payload = {
+                        message: 'CPT Test: Kommunikation OK ✅',
+                        user: u || undefined,
+                        device: u || undefined,
+                        title: 'ChargePoint',
+                        priority: 0
+                    };
+                } else {
+                    payload = {
+                        text: 'CPT Test: Kommunikation OK ✅',
+                        user: u || undefined,
+                        chatId: u || undefined,
+                        phone: u || undefined,
+                        title: 'ChargePoint',
+                        channelLabel: lbl || undefined,
+                    };
+                }
                 Object.keys(payload).forEach((k) => payload[k] === undefined && delete payload[k]);
 
                 // Send to target notification adapter
