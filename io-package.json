@@ -33,14 +33,15 @@
     "dataSource": "poll",
     "materialize": true,
     "materializeTab": true,
-    "adminUI": {
-      "config": "json"
-    },
-    "messagebox": true
+    "adminTab": {
+      "name": "CPT",
+      "icon": "cpt.png",
+      "ignoreVersion": false
+    }
   },
   "native": {
-    "interval": 5,
     "stations": [],
+    "interval": 5,
     "channels": []
   },
   "protectedNative": [],
