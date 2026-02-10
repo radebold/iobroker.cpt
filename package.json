@@ -1,6 +1,6 @@
 {
   "name": "iobroker.cpt",
-  "version": "0.2.3-beta.1",
+  "version": "0.2.5-beta.3",
   "description": "ioBroker adapter for ChargePoint stations",
   "main": "main.js",
   "author": "radebold",
