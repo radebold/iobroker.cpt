@@ -238,114 +238,93 @@ class CptAdapter extends utils.Adapter {
         }
     }
 
-    onMessage(obj) {
-        if (!obj || !obj.command) return;
-
-        if (obj.command === 'testStation') {
-            const name = obj.message?.name || obj.message?.station || '';
-            const deviceId1 = obj.message?.deviceId1;
-            const station = (Array.isArray(this.config.stations) ? this.config.stations : []).find((s) =>
-                s && (s.name === name || String(s.deviceId1) === String(deviceId1))
-            );
-
-            const stationName = station?.name || name || 'Station';
-            const city = obj.message?.city || '';
-            const text = `Ladestation ${stationName}${city ? ' (' + city + ')' : ''}: TEST Nachricht`;
-
-            this.sendMessageToChannels(text, { station: stationName, city, isTest: true })
-                .then((res) => {
-                    const out = `TEST gesendet: ok=${res.ok}, failed=${res.failed}\n${(res.details || []).join('\n')}`;
-                    obj.callback && this.sendTo(obj.from, obj.command, out, obj.callback);
-                })
-                .catch((e) => {
-                    obj.callback && this.sendTo(obj.from, obj.command, `TEST Fehler: ${e.message}`, obj.callback);
-                });
-            return;
-        }
-    }
-
     getChannels() {
-        const raw = Array.isArray(this.config.channels) ? this.config.channels : [];
-        // keep only enabled rows and only supported adapters
-        return raw
-            .filter((c) => c && isTrue(c.enabled) && typeof c.instance === 'string' && c.instance.trim())
-            .filter((c) => {
-                const inst = c.instance.trim();
-                return inst.startsWith('telegram.') || inst.startsWith('whatsapp-cmb.') || inst.startsWith('pushover.');
-            })
+        const channels = Array.isArray(this.config.channels) ? this.config.channels : [];
+        return channels
+            .filter((c) => c && c.enabled !== false && c.instance)
             .map((c) => ({
                 instance: String(c.instance).trim(),
-                user: (c.user ?? '').toString().trim(),
-                label: (c.label ?? '').toString().trim(),
-            }));
+                user: c.user !== undefined && c.user !== null ? String(c.user).trim() : '',
+                label: c.label !== undefined && c.label !== null ? String(c.label).trim() : '',
+            }))
+            .filter((c) => {
+                const ok = c.instance.startsWith('telegram.') || c.instance.startsWith('whatsapp-cmb.') || c.instance.startsWith('pushover.');
+                if (!ok) this.log.warn(`Kommunikations-Instanz wird ignoriert (nicht erlaubt): ${c.instance}`);
+                return ok;
+            });
     }
 
-    async sendMessageToChannels(text, ctx = {}) {async sendMessageToChannels(text, ctx = {}) {
-        const channels = (typeof this.getChannels === 'function' ? this.getChannels() : []) || [];
-        if (!Array.isArray(channels) || channels.length === 0) {
-            this.log.debug('Keine Kommunikationskanäle konfiguriert – Versand übersprungen');
-            return { ok: 0, failed: 0, details: [], note: 'no_channels' };
-        }
 
-        const sendToAsync = (instance, command, message) =>
-            new Promise((resolve, reject) => {
-                try {
-                    this.sendTo(instance, command, message, (resp) => resolve(resp));
-                } catch (e) {
-                    reject(e);
-                }
-            });
+    async sendMessageToChannels(text, ctx = {}) {
+        let channels = [];
+        try {
+            channels = (typeof this.getChannels === 'function' ? this.getChannels() : []) || [];
+        } catch (e) {
+            this.log.warn(`getChannels() failed: ${e.message}`);
+            channels = [];
+        }
+        if (channels.length === 0) {
+            this.log.debug('Keine Kommunikationskanäle konfiguriert – Versand übersprungen');
+            return { ok: 0, failed: 0, note: 'no_channels' };
+        }
 
         let ok = 0;
         let failed = 0;
-        const details = [];
 
-        for (const ch of channels) {
+        for (const ch of activeChannels) {
             const inst = ch.instance;
             const u = ch.user;
             const lbl = ch.label;
-
             const isTelegram = inst.startsWith('telegram.');
             const isWhatsAppCmb = inst.startsWith('whatsapp-cmb.');
             const isPushover = inst.startsWith('pushover.');
 
             let payload;
             if (isTelegram) {
-                // Telegram: user is optional (alias/chatId configured in Telegram adapter)
-                payload = u ? { text, user: u } : { text };
+                payload = { text, ...(u ? { user: u } : {}) };
             } else if (isWhatsAppCmb) {
-                // WhatsApp-CMB: receiver is the phone number, e.g. +49...
-                payload = { phone: u, text };
+                payload = {
+                    phone: u || undefined,
+                    number: u || undefined,
+                    to: u || undefined,
+                    text,
+                    message: text,
+                    title: 'ChargePoint',
+                    channelLabel: lbl || undefined,
+                };
             } else if (isPushover) {
-                // Pushover: receiver/user key is configured in the Pushover adapter itself
                 payload = { message: text, sound: '' };
             } else {
                 payload = { text };
             }
 
-            // add some context (harmless if adapter ignores unknown fields)
-            if (ctx && typeof ctx === 'object') {
-                if (ctx.city) payload.city = ctx.city;
-                if (ctx.station) payload.station = ctx.station;
-                if (ctx.freePorts !== undefined) payload.freePorts = ctx.freePorts;
-                if (ctx.portCount !== undefined) payload.portCount = ctx.portCount;
-                if (ctx.status) payload.status = ctx.status;
-            }
+            if (!payload.city && ctx && ctx.city) payload.city = ctx.city;
+            if (!payload.station && ctx && ctx.station) payload.station = ctx.station;
+            if (payload.freePorts === undefined && ctx && ctx.freePorts !== undefined) payload.freePorts = ctx.freePorts;
+            if (payload.portCount === undefined && ctx && ctx.portCount !== undefined) payload.portCount = ctx.portCount;
+            if (!payload.status && ctx && ctx.status) payload.status = ctx.status;
+
+            Object.keys(payload).forEach((k) => payload[k] === undefined && delete payload[k]);
+
+
 
             try {
-                await sendToAsync(inst, 'send', payload);
+                if (!payload.city && ctx && ctx.city) payload.city = ctx.city;
+                if (!payload.station && ctx && ctx.station) payload.station = ctx.station;
+                if (payload.freePorts === undefined && ctx && ctx.freePorts !== undefined) payload.freePorts = ctx.freePorts;
+                if (payload.portCount === undefined && ctx && ctx.portCount !== undefined) payload.portCount = ctx.portCount;
+                if (!payload.status && ctx && ctx.status) payload.status = ctx.status;
+                this.sendTo(ch.instance, 'send', payload);
                 ok++;
-                details.push(`OK: ${inst}${lbl ? ' (' + lbl + ')' : ''}`);
+                this.log.info(`Message gesendet über ${ch.instance} (${ch.label || 'Channel'})`);
             } catch (e) {
                 failed++;
-                details.push(`FAIL: ${inst}${lbl ? ' (' + lbl + ')' : ''}: ${e.message}`);
-                this.log.warn(`Notify failed for ${inst}${lbl ? ' (' + lbl + ')' : ''}: ${e.message}`);
+                this.log.warn(`sendTo fehlgeschlagen (${ch.instance}): ${e.message}`);
             }
         }
 
-        return { ok, failed, details };
+        return { ok, failed, note: 'sent' };
     }
-
 
     async sendAvailableNotification(ctx) {
         const prefix = ctx.isTest ? 'TEST: ' : '';
