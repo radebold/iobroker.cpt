@@ -329,6 +329,38 @@ class CptAdapter extends utils.Adapter {
         const text = `${prefix}Ladestation ${ctx.station} in ${ctx.city} ist nun frei${ctx.freePorts !== undefined && ctx.portCount !== undefined ? ` (${ctx.freePorts}/${ctx.portCount})` : ''}`;
         return this.sendMessageToChannels(text, ctx);
     }
+
+
+    async sendTestNotifyForPrefix(stationPrefix) {
+        // stationPrefix is like "stations.city.station"
+        try {
+            const cityKey = stationPrefix.split('.')[1] || 'unbekannt';
+            const stationKey = stationPrefix.split('.')[2] || 'station';
+            // Try to get friendly names from states (fallback to keys)
+            const nameState = await this.getStateAsync(`${stationPrefix}.name`).catch(() => null);
+            const cityState = await this.getStateAsync(`${stationPrefix}.city`).catch(() => null);
+            const freePortsState = await this.getStateAsync(`${stationPrefix}.freePorts`).catch(() => null);
+            const portCountState = await this.getStateAsync(`${stationPrefix}.portCount`).catch(() => null);
+
+            const stationName = (nameState && nameState.val) ? String(nameState.val) : stationKey;
+            const cityName = (cityState && cityState.val) ? String(cityState.val) : cityKey;
+            const freePorts = (freePortsState && freePortsState.val !== undefined) ? Number(freePortsState.val) : undefined;
+            const portCount = (portCountState && portCountState.val !== undefined) ? Number(portCountState.val) : undefined;
+
+            await this.sendAvailableNotification({
+                isTest: true,
+                station: stationName,
+                city: cityName,
+                freePorts,
+                portCount,
+            });
+
+            this.log.info(`TEST Notify gesendet: ${stationName} (${cityName})`);
+        } catch (e) {
+            this.log.warn(`TEST Notify fehlgeschlagen für ${stationPrefix}: ${e.message}`);
+        }
+    }
+
     async onMessage(obj) {
         if (!obj) return;
 
@@ -480,7 +512,7 @@ class CptAdapter extends utils.Adapter {
         // HANDLE_TESTNOTIFY: trigger test notifications via button-states
         if (id === this.namespace + '.tools.testNotifyAll' && state.val === true) {
             try {
-                const notifStates = await this.getStatesAsync('stations.*.*.notifyOnAvailable');
+                const notifStates = await this.getStatesAsync(this.namespace + '.stations.*.*.notifyOnAvailable');
                 const prefixes = Object.keys(notifStates || {})
                     .filter(k => notifStates[k] && notifStates[k].val === true)
                     .map(k => k.replace(/\.notifyOnAvailable$/, ''))
