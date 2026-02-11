@@ -14,6 +14,7 @@ class CptAdapter extends utils.Adapter {
         // cache last derived status per station for transition detection
         this.lastStatusByStation = {};
         this.lastFreePortsByStation = {};
+        this.stationPrefixByName = {};
 
         this.on('message', this.onMessage.bind(this));
         this.on('ready', this.onReady.bind(this));
@@ -423,7 +424,46 @@ class CptAdapter extends utils.Adapter {
             } catch (e) {
                 obj.callback && this.sendTo(obj.from, obj.command, { error: e.message }, obj.callback);
             }
+            
+        if (obj.command === 'testStation') {
+            const name = (obj.message?.name || '').toString().trim();
+            if (!name) {
+                obj.callback && this.sendTo(obj.from, obj.command, { error: 'Kein Stations-Name gesetzt' }, obj.callback);
+                return;
+            }
+
+            try {
+                let stationPrefix = this.stationPrefixByName[name];
+
+                // Fallback: search by stored states if not in map yet
+                if (!stationPrefix) {
+                    const nameStates = await this.getStatesAsync(this.namespace + '.stations.*.*.name');
+                    for (const [id, st] of Object.entries(nameStates || {})) {
+                        if (st && st.val && String(st.val) === name) {
+                            stationPrefix = id.replace(this.namespace + '.', '').replace(/\.name$/, '');
+                            break;
+                        }
+                    }
+                }
+
+                if (!stationPrefix) {
+                    throw new Error('Station nicht gefunden (noch keine Daten vom Polling?)');
+                }
+
+                await this.sendTestNotifyForPrefix(stationPrefix);
+
+                obj.callback && this.sendTo(
+                    obj.from,
+                    obj.command,
+                    { data: { result: `Test für ${name} gesendet` } },
+                    obj.callback
+                );
+            } catch (e) {
+                obj.callback && this.sendTo(obj.from, obj.command, { error: e.message }, obj.callback);
+            }
             return;
+        }
+return;
         }
     }
 
@@ -498,6 +538,7 @@ class CptAdapter extends utils.Adapter {
 
             const stationKey = this.getStationKey(st);
             const stationPrefix = `stations.${cityKey}.${stationKey}`;
+            this.stationPrefixByName[st.name] = stationPrefix;
             await this.ensureStationObjects(stationPrefix, st);
             await this.setStateAsync(`${stationPrefix}.freePorts`, { val: 0, ack: true });
         }
