@@ -72,6 +72,19 @@
                 "de": "Device ID (P2, optional)"
               },
               "width": 180
+            },
+            {
+              "type": "sendTo",
+              "title": {
+                "en": "Test",
+                "de": "Test"
+              },
+              "command": "testStation",
+              "jsonData": "{\"name\":\"${data.name}\",\"deviceId1\":\"${data.deviceId1}\",\"deviceId2\":\"${data.deviceId2}\"}",
+              "variant": "outlined",
+              "icon": "send",
+              "showProcess": true,
+              "timeout": 15000
             }
           ],
           "addRow": true,
@@ -90,14 +103,14 @@
           "type": "staticText",
           "text": {
             "en": "Pick an enabled instance. Tip: type 'telegram', 'whatsapp-cmb' or 'pushover' in the dropdown to filter quickly. Other instances will be ignored by the adapter.",
-            "de": "Wähle eine aktivierte Instanz. Tipp: im Dropdown einfach 'telegram', 'whatsapp-cmb' oder 'pushover' tippen, dann filtert die Liste sofort. Andere Instanzen werden vom Adapter ignoriert."
+            "de": "W\u00e4hle eine aktivierte Instanz. Tipp: im Dropdown einfach 'telegram', 'whatsapp-cmb' oder 'pushover' tippen, dann filtert die Liste sofort. Andere Instanzen werden vom Adapter ignoriert."
           }
         },
         "channels": {
           "type": "table",
           "label": {
             "en": "Channels",
-            "de": "Kanäle"
+            "de": "Kan\u00e4le"
           },
           "items": [
             {
@@ -126,7 +139,7 @@
               "attr": "user",
               "title": {
                 "en": "Recipient",
-                "de": "Empfänger"
+                "de": "Empf\u00e4nger"
               },
               "width": 170,
               "placeholder": "+4917... / Thomas",

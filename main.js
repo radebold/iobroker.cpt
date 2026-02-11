@@ -59,6 +59,8 @@ class CptAdapter extends utils.Adapter {
     }
 
     async ensureToolsObjects() {
+        await this.setObjectNotExistsAsync('tools', { type: 'channel', common: { name: 'Tools' }, native: {} });
+
         await this.setObjectNotExistsAsync('tools.export', {
             type: 'state',
             common: { name: 'Export Stationen (Trigger)', type: 'boolean', role: 'button', read: true, write: true, def: false },
@@ -148,19 +150,7 @@ class CptAdapter extends utils.Adapter {
             common: { name: 'Benachrichtigen wenn verfügbar', type: 'boolean', role: 'switch', read: true, write: true, def: false },
             native: {},
         });
-        
-            // Test button per station (sends a test notification using configured channels)
-            await this.setObjectNotExistsAsync(`${stationPrefix}.testNotify`, {
-                type: 'state',
-                common: { name: 'Test Benachrichtigung', type: 'boolean', role: 'button', read: false, write: true },
-                native: {},
-            });
-            await this.setObjectNotExistsAsync(`${stationPrefix}.lastTestResult`, {
-                type: 'state',
-                common: { name: 'Letztes Test-Protokoll', type: 'string', role: 'text', read: true, write: false },
-                native: {},
-            });
-const curNotify = await this.getStateAsync(`${stationPrefix}.notifyOnAvailable`);
+        const curNotify = await this.getStateAsync(`${stationPrefix}.notifyOnAvailable`);
         if (!curNotify || curNotify.val === null || curNotify.val === undefined) {
             await this.setStateAsync(`${stationPrefix}.notifyOnAvailable`, { val: !!station.notifyOnAvailable, ack: true });
         }
@@ -248,70 +238,112 @@ const curNotify = await this.getStateAsync(`${stationPrefix}.notifyOnAvailable`)
         }
     }
 
-    getChannels() {
-        const channels = Array.isArray(this.config.channels) ? this.config.channels : [];
-        return channels
-            .filter((c) => c && c.enabled !== false && c.instance)
-            .map((c) => ({
-                instance: String(c.instance).trim(),
-                user: c.user !== undefined && c.user !== null ? String(c.user).trim() : '',
-                label: c.label !== undefined && c.label !== null ? String(c.label).trim() : '',
-            }))
-            .filter((c) => {
-                const ok = c.instance.startsWith('telegram.') || c.instance.startsWith('whatsapp-cmb.') || c.instance.startsWith('pushover.');
-                if (!ok) this.log.warn(`Kommunikations-Instanz wird ignoriert (nicht erlaubt): ${c.instance}`);
-                return ok;
-            });
+    onMessage(obj) {
+        if (!obj || !obj.command) return;
+
+        if (obj.command === 'testStation') {
+            const name = obj.message?.name || obj.message?.station || '';
+            const deviceId1 = obj.message?.deviceId1;
+            const station = (Array.isArray(this.config.stations) ? this.config.stations : []).find((s) =>
+                s && (s.name === name || String(s.deviceId1) === String(deviceId1))
+            );
+
+            const stationName = station?.name || name || 'Station';
+            const city = obj.message?.city || '';
+            const text = `Ladestation ${stationName}${city ? ' (' + city + ')' : ''}: TEST Nachricht`;
+
+            this.sendMessageToChannels(text, { station: stationName, city, isTest: true })
+                .then((res) => {
+                    const out = `TEST gesendet: ok=${res.ok}, failed=${res.failed}\n${(res.details || []).join('\n')}`;
+                    obj.callback && this.sendTo(obj.from, obj.command, out, obj.callback);
+                })
+                .catch((e) => {
+                    obj.callback && this.sendTo(obj.from, obj.command, `TEST Fehler: ${e.message}`, obj.callback);
+                });
+            return;
+        }
     }
 
+    getChannels() {
+        const raw = Array.isArray(this.config.channels) ? this.config.channels : [];
+        // keep only enabled rows and only supported adapters
+        return raw
+            .filter((c) => c && isTrue(c.enabled) && typeof c.instance === 'string' && c.instance.trim())
+            .filter((c) => {
+                const inst = c.instance.trim();
+                return inst.startsWith('telegram.') || inst.startsWith('whatsapp-cmb.') || inst.startsWith('pushover.');
+            })
+            .map((c) => ({
+                instance: String(c.instance).trim(),
+                user: (c.user ?? '').toString().trim(),
+                label: (c.label ?? '').toString().trim(),
+            }));
+    }
 
-    
-    async sendMessageToChannels(text, ctx = {}) {
-        // Returns a short report string for UI/logging
-        const raw = this.config.channels || [];
-        const channels = Array.isArray(raw) ? raw : [];
-        const isEnabled = (v) => !(v === false || v === 'false' || v === 0 || v === '0' || v === null || v === undefined);
-
-        const active = channels.filter(c => c && isEnabled(c.enabled) && c.instance);
-        if (!active.length) {
-            const msg = 'Keine Kommunikationskanäle konfiguriert – Versand übersprungen';
-            this.log.debug(msg);
-            return msg;
+    async sendMessageToChannels(text, ctx = {}) {async sendMessageToChannels(text, ctx = {}) {
+        const channels = (typeof this.getChannels === 'function' ? this.getChannels() : []) || [];
+        if (!Array.isArray(channels) || channels.length === 0) {
+            this.log.debug('Keine Kommunikationskanäle konfiguriert – Versand übersprungen');
+            return { ok: 0, failed: 0, details: [], note: 'no_channels' };
         }
 
-        const results = [];
-        for (const ch of active) {
-            try {
-                const inst = String(ch.instance);
-                const label = ch.label ? String(ch.label) : inst;
-                const user = ch.user ? String(ch.user) : '';
-
-                // Adapter-spezifisches Routing:
-                // - pushover: sendTo(inst, 'send', { message, sound })
-                // - telegram: sendTo(inst, 'send', { text, user? })
-                // - whatsapp-cmb/open-wa: sendTo(inst, 'send', { text, phone })
-                const lower = inst.toLowerCase();
-                if (lower.startsWith('pushover.')) {
-                    await this.sendToAsync(inst, 'send', { message: text, sound: '' });
-                } else if (lower.startsWith('telegram.')) {
-                    // user optional (alias)
-                    const payload = user ? { text, user } : { text };
-                    await this.sendToAsync(inst, 'send', payload);
-                } else if (lower.startsWith('whatsapp-cmb.') || lower.startsWith('open-wa.')) {
-                    // WhatsApp expects phone/user in 'user'
-                    const payload = user ? { text, user } : { text };
-                    await this.sendToAsync(inst, 'send', payload);
-                } else {
-                    // Fallback: try generic send(text)
-                    await this.sendToAsync(inst, 'send', { text, user });
+        const sendToAsync = (instance, command, message) =>
+            new Promise((resolve, reject) => {
+                try {
+                    this.sendTo(instance, command, message, (resp) => resolve(resp));
+                } catch (e) {
+                    reject(e);
                 }
+            });
 
-                results.push(`${label}: OK`);
+        let ok = 0;
+        let failed = 0;
+        const details = [];
+
+        for (const ch of channels) {
+            const inst = ch.instance;
+            const u = ch.user;
+            const lbl = ch.label;
+
+            const isTelegram = inst.startsWith('telegram.');
+            const isWhatsAppCmb = inst.startsWith('whatsapp-cmb.');
+            const isPushover = inst.startsWith('pushover.');
+
+            let payload;
+            if (isTelegram) {
+                // Telegram: user is optional (alias/chatId configured in Telegram adapter)
+                payload = u ? { text, user: u } : { text };
+            } else if (isWhatsAppCmb) {
+                // WhatsApp-CMB: receiver is the phone number, e.g. +49...
+                payload = { phone: u, text };
+            } else if (isPushover) {
+                // Pushover: receiver/user key is configured in the Pushover adapter itself
+                payload = { message: text, sound: '' };
+            } else {
+                payload = { text };
+            }
+
+            // add some context (harmless if adapter ignores unknown fields)
+            if (ctx && typeof ctx === 'object') {
+                if (ctx.city) payload.city = ctx.city;
+                if (ctx.station) payload.station = ctx.station;
+                if (ctx.freePorts !== undefined) payload.freePorts = ctx.freePorts;
+                if (ctx.portCount !== undefined) payload.portCount = ctx.portCount;
+                if (ctx.status) payload.status = ctx.status;
+            }
+
+            try {
+                await sendToAsync(inst, 'send', payload);
+                ok++;
+                details.push(`OK: ${inst}${lbl ? ' (' + lbl + ')' : ''}`);
             } catch (e) {
-                results.push(`${ch.label || ch.instance}: FAIL (${e.message})`);
+                failed++;
+                details.push(`FAIL: ${inst}${lbl ? ' (' + lbl + ')' : ''}: ${e.message}`);
+                this.log.warn(`Notify failed for ${inst}${lbl ? ' (' + lbl + ')' : ''}: ${e.message}`);
             }
         }
-        return results.join(' | ');
+
+        return { ok, failed, details };
     }
 
 
@@ -501,7 +533,10 @@ const curNotify = await this.getStateAsync(`${stationPrefix}.notifyOnAvailable`)
     async onStateChange(id, state) {
         if (!state || state.ack) return;
         // HANDLE_TESTNOTIFY: trigger test notifications via button-states
-)
+        if (id === this.namespace + '.tools.testNotifyAll' && state.val === true) {
+            try {
+                const notifStates = await this.getStatesAsync(this.namespace + '.stations.*.*.notifyOnAvailable');
+                const prefixes = Object.keys(notifStates || {})
                     .filter(k => notifStates[k] && notifStates[k].val === true)
                     .map(k => k.replace(/\.notifyOnAvailable$/, ''))
                     .sort();
@@ -785,29 +820,6 @@ const curNotify = await this.getStateAsync(`${stationPrefix}.notifyOnAvailable`)
             callback();
         } catch (e) {
             callback();
-        }
-    }
-
-    async handleStationTestNotify(id) {
-        // id like: cpt.0.stations.city.station.testNotify
-        const stationPrefix = id.replace(/\.testNotify$/, '');
-        try {
-            const nameState = await this.getStateAsync(`${stationPrefix}.name`).catch(() => null);
-            const cityState = await this.getStateAsync(`${stationPrefix}.city`).catch(() => null);
-            const stationName = nameState?.val ? String(nameState.val) : stationPrefix.split('.').pop();
-            const cityName = cityState?.val ? String(cityState.val) : stationPrefix.split('.')[1];
-
-            const text = `TEST: Ladestation ${stationName} (${cityName}) ist nun frei`;
-            const report = await this.sendMessageToChannels(text, { isTest: true, stationPrefix, stationName, cityName });
-
-            await this.setStateAsync(`${stationPrefix}.lastTestResult`, { val: report, ack: true });
-            this.log.info(`TEST Notify gesendet: ${stationName} (${cityName})`);
-        } catch (e) {
-            const msg = `TEST Notify fehlgeschlagen: ${e.message}`;
-            await this.setStateAsync(`${stationPrefix}.lastTestResult`, { val: msg, ack: true }).catch(() => {});
-            this.log.warn(msg);
-        } finally {
-            await this.setStateAsync(id, { val: false, ack: true }).catch(() => {});
         }
     }
 }
