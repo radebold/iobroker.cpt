@@ -260,6 +260,11 @@ class CptAdapter extends utils.Adapter {
         let channels = [];
         try {
             channels = (typeof this.getChannels === 'function' ? this.getChannels() : []) || [];
+            if (ctx && ctx._forceSingle && ctx._forceSingle.instance) {
+                const inst = String(ctx._forceSingle.instance).trim();
+                const usr = ctx._forceSingle.user ? String(ctx._forceSingle.user).trim() : '';
+                channels = channels.filter(c => c.instance === inst).map(c => ({...c, user: usr || c.user }));
+            }
         } catch (e) {
             this.log.warn(`getChannels() failed: ${e.message}`);
             channels = [];
@@ -271,6 +276,8 @@ class CptAdapter extends utils.Adapter {
 
         let ok = 0;
         let failed = 0;
+
+        const activeChannels = channels;
 
         for (const ch of activeChannels) {
             const inst = ch.instance;
@@ -352,7 +359,7 @@ class CptAdapter extends utils.Adapter {
 
             await this.sendAvailableNotification({
                 isTest: true,
-                station: stationName,
+                station: st.name,
                 city: cityName,
                 freePorts,
                 portCount,
@@ -364,77 +371,434 @@ class CptAdapter extends utils.Adapter {
         }
     }
 
-    
-async onMessage(obj) {
-    try {
+    async onMessage(obj) {
         if (!obj || !obj.command) return;
 
-        this.log.debug(`onMessage: command=${obj.command}, from=${obj.from}`);
-
+        // Triggered from admin (UI buttons)
         if (obj.command === 'testChannel') {
-            const instance = (obj.message?.instance || '').toString().trim();
-            const user = (obj.message?.user || '').toString().trim();
-            const label = (obj.message?.label || '').toString().trim();
+            // message: { instance, user, label }
+            const msg = obj.message || {};
+            const instance = (msg.instance || '').toString().trim();
+            const user = (msg.user || '').toString().trim();
 
             if (!instance) {
-                obj.callback && this.sendTo(obj.from, obj.command, { error: 'Kein Adapter-Instanz gesetzt' }, obj.callback);
+                obj.callback && this.sendTo(obj.from, obj.command, { error: 'Keine Instanz gesetzt' }, obj.callback);
                 return;
             }
 
             try {
-                await this.sendTestMessageViaChannel({ instance, user, label }, 'TEST: Kommunikation OK ✅');
-                obj.callback && this.sendTo(obj.from, obj.command, { result: 'ok' }, obj.callback);
+                const text = `CPT Test: Kommunikation OK ✅ (${instance})`;
+                const res = await this.sendMessageToChannels(text, { isTest: true, _forceSingle: { instance, user } });
+                obj.callback && this.sendTo(obj.from, obj.command, { data: { result: `Test gesendet (ok=${res.ok}, failed=${res.failed})` } }, obj.callback);
             } catch (e) {
-                this.log.warn(`TEST Notify failed for channel ${instance}: ${e.message}`);
                 obj.callback && this.sendTo(obj.from, obj.command, { error: e.message }, obj.callback);
             }
             return;
         }
 
         if (obj.command === 'testStation') {
-            const nameRaw = (obj.message?.name || obj.message?.stationName || '').toString().trim();
-            const nameKey = nameRaw.toLowerCase();
+            // message: { name } or { stationPrefix }
+            const msg = obj.message || {};
+            const name = (msg.name || '').toString().trim();
+            let stationPrefix = (msg.stationPrefix || '').toString().trim();
 
-            if (!nameRaw) {
+            if (!stationPrefix && !name) {
                 obj.callback && this.sendTo(obj.from, obj.command, { error: 'Kein Stations-Name gesetzt' }, obj.callback);
                 return;
             }
 
-            this.log.info(`UI TEST Station Button: ${nameRaw}`);
+            try {
+                if (!stationPrefix) {
+                    // Fast path: map created at onReady
+                    stationPrefix = this.stationPrefixByName?.[name];
 
-            let stationPrefix = this.stationPrefixByName?.[nameKey];
-
-            // Fallback: search by created objects
-            if (!stationPrefix) {
-                const all = await this.getForeignObjectsAsync(`${this.namespace}.stations.*.*.statusDerived`);
-                for (const id of Object.keys(all || {})) {
-                    const parts = id.split('.');
-                    const station = parts[4] || '';
-                    if (station.toLowerCase() === nameKey.replace(/\s+/g, '_')) {
-                        stationPrefix = `stations.${parts[3]}.${parts[4]}`;
-                        break;
+                    // Fallback: find station by stored name-states
+                    if (!stationPrefix) {
+                        const nameStates = await this.getStatesAsync(this.namespace + '.stations.*.*.name');
+                        for (const [id, st] of Object.entries(nameStates || {})) {
+                            if (st && st.val && String(st.val) === name) {
+                                stationPrefix = id.replace(this.namespace + '.', '').replace(/\.name$/, '');
+                                break;
+                            }
+                        }
                     }
                 }
+
+                if (!stationPrefix) {
+                    throw new Error('Station nicht gefunden (noch keine Daten vom Polling?)');
+                }
+
+                await this.sendTestNotifyForPrefix(stationPrefix);
+
+                obj.callback && this.sendTo(
+                    obj.from,
+                    obj.command,
+                    { data: { result: `Test für ${name || stationPrefix} gesendet` } },
+                    obj.callback
+                );
+            } catch (e) {
+                obj.callback && this.sendTo(obj.from, obj.command, { error: e.message }, obj.callback);
             }
+            return;
+        }
+    }
 
-            if (!stationPrefix) {
-                this.log.warn(`UI TEST: Station nicht gefunden: ${nameRaw}`);
-                obj.callback && this.sendTo(obj.from, obj.command, { error: 'station_not_found' }, obj.callback);
-                return;
-            }
+    async onReady() {
+        this.log.info('Adapter CPT gestartet');
+        this.log.info('Konfiguration: ' + JSON.stringify(this.config));
 
-            await this.sendTestNotifyForPrefix(stationPrefix);
+        await this.ensureToolsObjects();
+        this.subscribeStates('tools.export');
+        this.subscribeStates('tools.testNotify');
+        this.subscribeStates('tools.testNotifyAll');
+        this.subscribeStates('stations.*.*.notifyOnAvailable');
+        this.subscribeStates('stations.*.*.testNotify');
+        this.subscribeStates('stations.*.*.statusDerived');
 
-            obj.callback && this.sendTo(obj.from, obj.command, { result: 'ok' }, obj.callback);
+        const intervalMin = Number(this.config.interval) || 5;
+
+        const stations = (Array.isArray(this.config.stations) ? this.config.stations : [])
+            .filter((s) => s && typeof s === 'object')
+            .map((s, idx) => {
+                const deviceId1 = s.deviceId1 ?? s.stationId ?? s.deviceId ?? s.id;
+                const deviceId2 = s.deviceId2 ?? null;
+                const name = s.name || `station_${deviceId1 || idx + 1}`;
+                const enabled = s.enabled !== false;
+                return {
+                    name,
+                    enabled,
+                    notifyOnAvailable: s.notifyOnAvailable === true,
+                    deviceId1: deviceId1 ? Number(deviceId1) : null,
+                    deviceId2: deviceId2 ? Number(deviceId2) : null,
+                };
+            })
+            .filter((s) => !!s.deviceId1);
+
+        this.log.info(`Anzahl Stationen (gültig): ${stations.length}`);
+        this.log.info(`Polling-Intervall: ${intervalMin} Minuten`);
+
+        const initialDataByStation = [];
+        for (const st of stations) {
+            const data1 = await this.safeFetch(st.deviceId1);
+            const data2 = st.deviceId2 ? await this.safeFetch(st.deviceId2) : null;
+            initialDataByStation.push({ st, data1, data2 });
+        }
+
+        const allowedStationChannels = new Set();
+        const allowedCityChannels = new Set();
+
+        for (const item of initialDataByStation) {
+            const city = this.pickCity(item.data1, item.data2);
+            const cityKey = this.makeSafeName(city) || 'unbekannt';
+            const stationKey = this.getStationKey(item.st);
+            const stationPrefix = `stations.${cityKey}.${stationKey}`;
+            allowedStationChannels.add(`${this.namespace}.${stationPrefix}`);
+            allowedCityChannels.add(`${this.namespace}.stations.${cityKey}`);
+        }
+
+        await this.cleanupRemovedStations(allowedStationChannels, allowedCityChannels);
+
+        if (stations.length === 0) {
+            this.log.warn('Keine gültigen Stationen konfiguriert');
             return;
         }
 
-    } catch (e) {
-        this.log.warn(`onMessage error: ${e.message}`);
-    }
-}
+        for (const item of initialDataByStation) {
+            const st = item.st;
+            const city = this.pickCity(item.data1, item.data2);
+            const cityKey = this.makeSafeName(city) || 'unbekannt';
 
-onUnload(callback) {(callback) {
+            await this.ensureCityChannel(`stations.${cityKey}`, city);
+
+            const stationKey = this.getStationKey(st);
+            const stationPrefix = `stations.${cityKey}.${stationKey}`;
+            this.stationPrefixByName[st.name] = stationPrefix;
+            await this.ensureStationObjects(stationPrefix, st);
+            await this.setStateAsync(`${stationPrefix}.freePorts`, { val: 0, ack: true });
+        }
+
+        await this.updateAllStations(stations);
+
+        this.pollInterval = setInterval(() => {
+            this.updateAllStations(stations).catch((e) => this.log.error(`Polling-Fehler: ${e?.message || e}`));
+        }, intervalMin * 60 * 1000);
+    }
+
+    async onStateChange(id, state) {
+        if (!state || state.ack) return;
+        // HANDLE_TESTNOTIFY: trigger test notifications via button-states
+        if (id === this.namespace + '.tools.testNotifyAll' && state.val === true) {
+            try {
+                const notifStates = await this.getStatesAsync(this.namespace + '.stations.*.*.notifyOnAvailable');
+                const prefixes = Object.keys(notifStates || {})
+                    .filter(k => notifStates[k] && notifStates[k].val === true)
+                    .map(k => k.replace(/\.notifyOnAvailable$/, ''))
+                    .sort();
+
+                if (!prefixes.length) {
+                    this.log.warn('TEST Notify ALL: Keine Stationen mit notifyOnAvailable=true gefunden');
+                } else {
+                    for (const stationPrefix of prefixes) {
+                        await this.sendTestNotifyForPrefix(stationPrefix);
+                    }
+                    this.log.info(`TEST Notify ALL: ${prefixes.length} Station(en) ausgelöst`);
+                }
+            } catch (e) {
+                this.log.warn(`TEST Notify ALL fehlgeschlagen: ${e.message}`);
+            } finally {
+                await this.setStateAsync('tools.testNotifyAll', { val: false, ack: true });
+            }
+            return;
+        }
+
+        const mTest = id.match(new RegExp('^' + this.namespace.replace('.', '\\.') + '\\.stations\\.(.+?)\\.(.+?)\\.testNotify$'));
+        if (mTest && state.val === true) {
+            const cityKey = mTest[1];
+            const stationKey = mTest[2];
+            const stationPrefix = `stations.${cityKey}.${stationKey}`;
+
+            try {
+                await this.sendTestNotifyForPrefix(stationPrefix);
+                this.log.info(`TEST Notify: ${stationPrefix} ausgelöst`);
+            } catch (e) {
+                this.log.warn(`TEST Notify fehlgeschlagen für ${stationPrefix}: ${e.message}`);
+            } finally {
+                await this.setStateAsync(`${stationPrefix}.testNotify`, { val: false, ack: true });
+            }
+            return;
+        }
+
+        // STATUS_DERIVED_MANUAL: allow manual testing from scripts (ack=false)
+        // If statusDerived changes to "available" and notify flag is true, send a TEST notification.
+        const mStatus = id.match(new RegExp('^' + this.namespace.replace('.', '\\.') + '\\.stations\\.(.+?)\\.(.+?)\\.statusDerived$'));
+        if (mStatus) {
+            const cityKey = mStatus[1];
+            const stationKey = mStatus[2];
+            const stationPrefix = `stations.${cityKey}.${stationKey}`;
+
+            const newStatus = (state.val ?? '').toString();
+            const oldStatus = this.lastStatusByStation[stationPrefix];
+
+            // update cache immediately
+            this.lastStatusByStation[stationPrefix] = newStatus;
+
+            try {
+                const notify = await this.getStateAsync(`${stationPrefix}.notifyOnAvailable`);
+                const notifyEnabled = notify?.val === true;
+
+                const wasAvailable = oldStatus === 'available';
+                if (notifyEnabled && !wasAvailable && newStatus === 'available') {
+                    const cityObj = await this.getObjectAsync(`stations.${cityKey}`);
+                    const cityName = cityObj?.common?.name || cityKey;
+
+                    const fp = await this.getStateAsync(`${stationPrefix}.freePorts`);
+                    const pc = await this.getStateAsync(`${stationPrefix}.portCount`);
+
+                    const freePorts = fp?.val !== undefined && fp?.val !== null ? Number(fp.val) : undefined;
+                    const portCount = pc?.val !== undefined && pc?.val !== null ? Number(pc.val) : undefined;
+
+                    await this.sendAvailableNotification({
+                        city: cityName,
+                        station: stationKey,
+                        freePorts,
+                        portCount,
+                        status: newStatus,
+                        isTest: true,
+                    });
+
+                    this.log.info(`Manual notify trigger (TEST): ${stationPrefix} ${oldStatus} -> ${newStatus}`);
+                } else {
+                    this.log.debug(`Manual statusDerived change ignored: ${stationPrefix} ${oldStatus} -> ${newStatus} (notify=${notifyEnabled})`);
+                }
+            } catch (e) {
+                this.log.warn(`Manual statusDerived notify check failed for ${stationPrefix}: ${e.message}`);
+            }
+            return;
+        }
+
+
+
+        if (id === `${this.namespace}.tools.export` && state.val === true) {
+            await this.doExportStations();
+            await this.setStateAsync('tools.export', { val: false, ack: true });
+            return;
+        }
+
+        if (id === `${this.namespace}.tools.testNotify` && state.val === true) {
+            const now = new Date().toISOString();
+            const res = await this.sendMessageToChannels('CPT Test: Kommunikation OK ✅');
+            await this.setStateAsync('tools.lastTest', { val: now, ack: true });
+            await this.setStateAsync('tools.lastTestResult', { val: `ok=${res.ok}, failed=${res.failed}`, ack: true });
+            await this.setStateAsync('tools.testNotify', { val: false, ack: true });
+            return;
+        }
+    }
+
+    async doExportStations() {
+        const stations = (Array.isArray(this.config.stations) ? this.config.stations : [])
+            .filter((s) => s && typeof s === 'object')
+            .map((s, idx) => ({
+                enabled: s.enabled !== false,
+                notifyOnAvailable: s.notifyOnAvailable === true,
+                name: s.name || `station_${s.deviceId1 ?? s.stationId ?? s.deviceId ?? idx + 1}`,
+                deviceId1: Number(s.deviceId1 ?? s.stationId ?? s.deviceId ?? s.id),
+                deviceId2: s.deviceId2 ? Number(s.deviceId2) : null,
+            }))
+            .filter((s) => !!s.deviceId1);
+
+        const payload = {
+            exportedAt: new Date().toISOString(),
+            adapter: 'cpt',
+            version: this.version,
+            interval: Number(this.config.interval) || 5,
+            channels: Array.isArray(this.config.channels) ? this.config.channels : [],
+            stations,
+        };
+
+        const jsonStr = JSON.stringify(payload, null, 2);
+
+        await this.setStateAsync('tools.exportJson', { val: jsonStr, ack: true });
+
+        const filename = 'stations_export.json';
+        try {
+            await this.writeFileAsync(this.namespace, filename, jsonStr);
+            await this.setStateAsync('tools.exportFile', { val: filename, ack: true });
+        } catch (e) {
+            this.log.warn(`Konnte Export-Datei nicht schreiben: ${e.message}`);
+            await this.setStateAsync('tools.exportFile', { val: '', ack: true });
+        }
+
+        await this.setStateAsync('tools.lastExport', { val: new Date().toISOString(), ack: true });
+        this.log.info(`Export erstellt: ${stations.length} Station(en)`);
+    }
+
+    async safeFetch(deviceId) {
+        try {
+            const url = `https://mc.chargepoint.com/map-prod/v3/station/info?deviceId=${deviceId}`;
+            this.log.debug(`GET ${url}`);
+            const res = await axios.get(url, { timeout: 12000 });
+            return res.data || {};
+        } catch (e) {
+            this.log.warn(`Fetch fehlgeschlagen für deviceId=${deviceId}: ${e.message}`);
+            return null;
+        }
+    }
+
+    buildLogicalPorts(data1, data2, hasSecondId) {
+        if (hasSecondId) {
+            const p1 = (data1?.portsInfo?.ports && data1.portsInfo.ports[0]) ? data1.portsInfo.ports[0] : {};
+            const p2 = (data2?.portsInfo?.ports && data2.portsInfo.ports[0]) ? data2.portsInfo.ports[0] : {};
+            return [{ ...p1, outletNumber: 1 }, { ...p2, outletNumber: 2 }];
+        }
+        const ports = Array.isArray(data1?.portsInfo?.ports) ? data1.portsInfo.ports : [];
+        return ports;
+    }
+
+    async updateAllStations(stations) {
+        for (const st of stations) {
+            const data1 = await this.safeFetch(st.deviceId1);
+            const data2 = st.deviceId2 ? await this.safeFetch(st.deviceId2) : null;
+
+            const city = this.pickCity(data1, data2);
+            const cityKey = this.makeSafeName(city) || 'unbekannt';
+            const stationKey = this.getStationKey(st);
+            const stationPrefix = `stations.${cityKey}.${stationKey}`;
+
+            await this.ensureCityChannel(`stations.${cityKey}`, city);
+            await this.ensureStationObjects(stationPrefix, st);
+
+            const notifyState = await this.getStateAsync(`${stationPrefix}.notifyOnAvailable`);
+            const notifyEnabled = notifyState?.val === true;
+
+            if (st.enabled === false) {
+                await this.setStateAsync(`${stationPrefix}.statusDerived`, { val: 'deaktiviert', ack: true });
+                await this.setStateAsync(`${stationPrefix}.portCount`, { val: 0, ack: true });
+                await this.setStateAsync(`${stationPrefix}.freePorts`, { val: 0, ack: true });
+                await this.setStateAsync(`${stationPrefix}.lastUpdate`, { val: new Date().toISOString(), ack: true });
+                continue;
+            }
+
+            const ports = this.buildLogicalPorts(data1, data2, !!st.deviceId2);
+            const portCount = st.deviceId2 ? 2 : ports.length;
+            const freePorts = ports.reduce((acc, p) => acc + (this.normalizeStatus(p?.statusV2 || p?.status) === 'available' ? 1 : 0), 0);
+            const derived = this.deriveStationStatusFromPorts(ports);
+
+            const prevState = await this.getStateAsync(`${stationPrefix}.statusDerived`);
+            const prev = prevState?.val ? String(prevState.val) : undefined;
+
+            await this.setStateAsync(`${stationPrefix}.portCount`, { val: portCount, ack: true });
+            await this.setStateAsync(`${stationPrefix}.freePorts`, { val: freePorts, ack: true });
+            await this.setStateAsync(`${stationPrefix}.statusDerived`, { val: derived, ack: true });
+            this.lastStatusByStation[stationPrefix] = derived;
+
+            // Notify when station becomes available based on freePorts transition: 0 -> >0
+            const oldFreePorts = this.lastFreePortsByStation[stationPrefix];
+            this.lastFreePortsByStation[stationPrefix] = freePorts;
+
+            try {
+                const notify = await this.getStateAsync(`${stationPrefix}.notifyOnAvailable`);
+                const notifyEnabled = notify?.val === true;
+
+                const becameFree = oldFreePorts !== undefined && Number(oldFreePorts) === 0 && Number(freePorts) > 0;
+                if (notifyEnabled && becameFree) {
+                    await this.sendAvailableNotification({
+                        city,
+                        station: st.name,
+                        freePorts,
+                        portCount,
+                        status: derived,
+                        isTest: false,
+                    });
+                    this.log.info(`Notify trigger: ${st.name} (${city}) freePorts ${oldFreePorts} -> ${freePorts}`);
+                }
+            } catch (e) {
+                this.log.warn(`Notify check failed for ${stationPrefix}: ${e.message}`);
+            }
+
+
+            for (let i = 0; i < ports.length; i++) {
+                const port = ports[i] || {};
+                const outletNumber = port.outletNumber ?? (i + 1);
+                const portPrefix = await this.ensurePortObjects(stationPrefix, outletNumber);
+
+                const pStatus = port.status || 'unknown';
+                const pStatusV2 = port.statusV2 || 'unknown';
+                const evseId = port.evseId ? String(port.evseId) : '';
+
+                let maxPowerKw = null;
+                const prMax = port?.powerRange?.max;
+                if (typeof prMax === 'number') {
+                    maxPowerKw = prMax;
+                } else if (typeof prMax === 'string') {
+                    const parsed = Number(prMax);
+                    if (!Number.isNaN(parsed)) maxPowerKw = parsed;
+                }
+
+                const level = port.level ? String(port.level) : '';
+                const displayLevel = port.displayLevel ? String(port.displayLevel) : '';
+
+                const connector0 = Array.isArray(port.connectorList) && port.connectorList.length > 0 ? port.connectorList[0] : null;
+                const plugType = connector0?.plugType ? String(connector0.plugType) : '';
+                const displayPlugType = connector0?.displayPlugType ? String(connector0.displayPlugType) : '';
+
+                await this.setStateAsync(`${portPrefix}.status`, { val: pStatus, ack: true });
+                await this.setStateAsync(`${portPrefix}.statusV2`, { val: pStatusV2, ack: true });
+                await this.setStateAsync(`${portPrefix}.evseId`, { val: evseId, ack: true });
+                if (maxPowerKw !== null) await this.setStateAsync(`${portPrefix}.maxPowerKw`, { val: maxPowerKw, ack: true });
+                await this.setStateAsync(`${portPrefix}.level`, { val: level, ack: true });
+                await this.setStateAsync(`${portPrefix}.displayLevel`, { val: displayLevel, ack: true });
+                await this.setStateAsync(`${portPrefix}.plugType`, { val: plugType, ack: true });
+                await this.setStateAsync(`${portPrefix}.displayPlugType`, { val: displayPlugType, ack: true });
+                await this.setStateAsync(`${portPrefix}.lastUpdate`, { val: new Date().toISOString(), ack: true });
+            }
+
+            await this.setStateAsync(`${stationPrefix}.lastUpdate`, { val: new Date().toISOString(), ack: true });
+
+            this.log.info(`Aktualisiert: ${st.name} → city=${city}, freePorts=${freePorts}, portCount=${portCount}, derived=${derived}`);
+        }
+    }
+
+    onUnload(callback) {
         try {
             if (this.pollInterval) clearInterval(this.pollInterval);
             callback();
