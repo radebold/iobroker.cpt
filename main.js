@@ -59,8 +59,6 @@ class CptAdapter extends utils.Adapter {
     }
 
     async ensureToolsObjects() {
-        await this.setObjectNotExistsAsync('tools', { type: 'channel', common: { name: 'Tools' }, native: {} });
-
         await this.setObjectNotExistsAsync('tools.export', {
             type: 'state',
             common: { name: 'Export Stationen (Trigger)', type: 'boolean', role: 'button', read: true, write: true, def: false },
@@ -150,7 +148,19 @@ class CptAdapter extends utils.Adapter {
             common: { name: 'Benachrichtigen wenn verfügbar', type: 'boolean', role: 'switch', read: true, write: true, def: false },
             native: {},
         });
-        const curNotify = await this.getStateAsync(`${stationPrefix}.notifyOnAvailable`);
+        
+            // Test button per station (sends a test notification using configured channels)
+            await this.setObjectNotExistsAsync(`${stationPrefix}.testNotify`, {
+                type: 'state',
+                common: { name: 'Test Benachrichtigung', type: 'boolean', role: 'button', read: false, write: true },
+                native: {},
+            });
+            await this.setObjectNotExistsAsync(`${stationPrefix}.lastTestResult`, {
+                type: 'state',
+                common: { name: 'Letztes Test-Protokoll', type: 'string', role: 'text', read: true, write: false },
+                native: {},
+            });
+const curNotify = await this.getStateAsync(`${stationPrefix}.notifyOnAvailable`);
         if (!curNotify || curNotify.val === null || curNotify.val === undefined) {
             await this.setStateAsync(`${stationPrefix}.notifyOnAvailable`, { val: !!station.notifyOnAvailable, ack: true });
         }
@@ -255,76 +265,55 @@ class CptAdapter extends utils.Adapter {
     }
 
 
+    
     async sendMessageToChannels(text, ctx = {}) {
-        let channels = [];
-        try {
-            channels = (typeof this.getChannels === 'function' ? this.getChannels() : []) || [];
-        } catch (e) {
-            this.log.warn(`getChannels() failed: ${e.message}`);
-            channels = [];
+        // Returns a short report string for UI/logging
+        const raw = this.config.channels || [];
+        const channels = Array.isArray(raw) ? raw : [];
+        const isEnabled = (v) => !(v === false || v === 'false' || v === 0 || v === '0' || v === null || v === undefined);
+
+        const active = channels.filter(c => c && isEnabled(c.enabled) && c.instance);
+        if (!active.length) {
+            const msg = 'Keine Kommunikationskanäle konfiguriert – Versand übersprungen';
+            this.log.debug(msg);
+            return msg;
         }
-        if (channels.length === 0) {
-            this.log.debug('Keine Kommunikationskanäle konfiguriert – Versand übersprungen');
-            return { ok: 0, failed: 0, note: 'no_channels' };
-        }
 
-        let ok = 0;
-        let failed = 0;
-
-        for (const ch of activeChannels) {
-            const inst = ch.instance;
-            const u = ch.user;
-            const lbl = ch.label;
-            const isTelegram = inst.startsWith('telegram.');
-            const isWhatsAppCmb = inst.startsWith('whatsapp-cmb.');
-            const isPushover = inst.startsWith('pushover.');
-
-            let payload;
-            if (isTelegram) {
-                payload = { text, ...(u ? { user: u } : {}) };
-            } else if (isWhatsAppCmb) {
-                payload = {
-                    phone: u || undefined,
-                    number: u || undefined,
-                    to: u || undefined,
-                    text,
-                    message: text,
-                    title: 'ChargePoint',
-                    channelLabel: lbl || undefined,
-                };
-            } else if (isPushover) {
-                payload = { message: text, sound: '' };
-            } else {
-                payload = { text };
-            }
-
-            if (!payload.city && ctx && ctx.city) payload.city = ctx.city;
-            if (!payload.station && ctx && ctx.station) payload.station = ctx.station;
-            if (payload.freePorts === undefined && ctx && ctx.freePorts !== undefined) payload.freePorts = ctx.freePorts;
-            if (payload.portCount === undefined && ctx && ctx.portCount !== undefined) payload.portCount = ctx.portCount;
-            if (!payload.status && ctx && ctx.status) payload.status = ctx.status;
-
-            Object.keys(payload).forEach((k) => payload[k] === undefined && delete payload[k]);
-
-
-
+        const results = [];
+        for (const ch of active) {
             try {
-                if (!payload.city && ctx && ctx.city) payload.city = ctx.city;
-                if (!payload.station && ctx && ctx.station) payload.station = ctx.station;
-                if (payload.freePorts === undefined && ctx && ctx.freePorts !== undefined) payload.freePorts = ctx.freePorts;
-                if (payload.portCount === undefined && ctx && ctx.portCount !== undefined) payload.portCount = ctx.portCount;
-                if (!payload.status && ctx && ctx.status) payload.status = ctx.status;
-                this.sendTo(ch.instance, 'send', payload);
-                ok++;
-                this.log.info(`Message gesendet über ${ch.instance} (${ch.label || 'Channel'})`);
+                const inst = String(ch.instance);
+                const label = ch.label ? String(ch.label) : inst;
+                const user = ch.user ? String(ch.user) : '';
+
+                // Adapter-spezifisches Routing:
+                // - pushover: sendTo(inst, 'send', { message, sound })
+                // - telegram: sendTo(inst, 'send', { text, user? })
+                // - whatsapp-cmb/open-wa: sendTo(inst, 'send', { text, phone })
+                const lower = inst.toLowerCase();
+                if (lower.startsWith('pushover.')) {
+                    await this.sendToAsync(inst, 'send', { message: text, sound: '' });
+                } else if (lower.startsWith('telegram.')) {
+                    // user optional (alias)
+                    const payload = user ? { text, user } : { text };
+                    await this.sendToAsync(inst, 'send', payload);
+                } else if (lower.startsWith('whatsapp-cmb.') || lower.startsWith('open-wa.')) {
+                    // WhatsApp expects phone/user in 'user'
+                    const payload = user ? { text, user } : { text };
+                    await this.sendToAsync(inst, 'send', payload);
+                } else {
+                    // Fallback: try generic send(text)
+                    await this.sendToAsync(inst, 'send', { text, user });
+                }
+
+                results.push(`${label}: OK`);
             } catch (e) {
-                failed++;
-                this.log.warn(`sendTo fehlgeschlagen (${ch.instance}): ${e.message}`);
+                results.push(`${ch.label || ch.instance}: FAIL (${e.message})`);
             }
         }
-
-        return { ok, failed, note: 'sent' };
+        return results.join(' | ');
     }
+
 
     async sendAvailableNotification(ctx) {
         const prefix = ctx.isTest ? 'TEST: ' : '';
@@ -512,10 +501,7 @@ class CptAdapter extends utils.Adapter {
     async onStateChange(id, state) {
         if (!state || state.ack) return;
         // HANDLE_TESTNOTIFY: trigger test notifications via button-states
-        if (id === this.namespace + '.tools.testNotifyAll' && state.val === true) {
-            try {
-                const notifStates = await this.getStatesAsync(this.namespace + '.stations.*.*.notifyOnAvailable');
-                const prefixes = Object.keys(notifStates || {})
+)
                     .filter(k => notifStates[k] && notifStates[k].val === true)
                     .map(k => k.replace(/\.notifyOnAvailable$/, ''))
                     .sort();
@@ -799,6 +785,29 @@ class CptAdapter extends utils.Adapter {
             callback();
         } catch (e) {
             callback();
+        }
+    }
+
+    async handleStationTestNotify(id) {
+        // id like: cpt.0.stations.city.station.testNotify
+        const stationPrefix = id.replace(/\.testNotify$/, '');
+        try {
+            const nameState = await this.getStateAsync(`${stationPrefix}.name`).catch(() => null);
+            const cityState = await this.getStateAsync(`${stationPrefix}.city`).catch(() => null);
+            const stationName = nameState?.val ? String(nameState.val) : stationPrefix.split('.').pop();
+            const cityName = cityState?.val ? String(cityState.val) : stationPrefix.split('.')[1];
+
+            const text = `TEST: Ladestation ${stationName} (${cityName}) ist nun frei`;
+            const report = await this.sendMessageToChannels(text, { isTest: true, stationPrefix, stationName, cityName });
+
+            await this.setStateAsync(`${stationPrefix}.lastTestResult`, { val: report, ack: true });
+            this.log.info(`TEST Notify gesendet: ${stationName} (${cityName})`);
+        } catch (e) {
+            const msg = `TEST Notify fehlgeschlagen: ${e.message}`;
+            await this.setStateAsync(`${stationPrefix}.lastTestResult`, { val: msg, ack: true }).catch(() => {});
+            this.log.warn(msg);
+        } finally {
+            await this.setStateAsync(id, { val: false, ack: true }).catch(() => {});
         }
     }
 }
