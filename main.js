@@ -3,6 +3,8 @@
 const utils = require('@iobroker/adapter-core');
 const axios = require('axios');
 
+
+function isTrue(v) { return v === true || v === 'true' || v === 1 || v === '1' || v === 'on' || v === 'yes'; }
 class CptAdapter extends utils.Adapter {
     constructor(options) {
         super({ ...options, name: 'cpt' });
@@ -269,7 +271,7 @@ class CptAdapter extends utils.Adapter {
         let ok = 0;
         let failed = 0;
 
-        for (const ch of channels) {
+        for (const ch of activeChannels) {
             const inst = ch.instance;
             const u = ch.user;
             const lbl = ch.label;
