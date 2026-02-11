@@ -367,92 +367,15 @@ class CptAdapter extends utils.Adapter {
     async onMessage(obj) {
         if (!obj) return;
 
-        // Test a single communication channel row (Kommunikation tab)
         if (obj.command === 'testChannel') {
             const instance = (obj.message?.instance || '').toString().trim();
             const user = (obj.message?.user || '').toString().trim();
             const label = (obj.message?.label || '').toString().trim();
 
             if (!instance) {
-                if (obj.callback) this.sendTo(obj.from, obj.command, { error: 'Kein Adapter-Instanz gesetzt' }, obj.callback);
+                obj.callback && this.sendTo(obj.from, obj.command, { error: 'Kein Adapter-Instanz gesetzt' }, obj.callback);
                 return;
             }
-
-            try {
-                const inst = instance;
-                const u = user;
-                const isTelegram = inst.startsWith('telegram.');
-                const isWhatsAppCmb = inst.startsWith('whatsapp-cmb.');
-                const isPushover = inst.startsWith('pushover.');
-                const isOpenWa = inst.startsWith('open-wa.');
-
-                let payload;
-
-                if (isTelegram) {
-                    payload = { text: 'CPT Test: Kommunikation OK ✅', ...(u ? { user: u } : {}) };
-                } else if (isWhatsAppCmb) {
-                    payload = { phone: u || undefined, number: u || undefined, message: 'CPT Test: Kommunikation OK ✅' };
-                } else if (isOpenWa) {
-                    payload = { phone: u || undefined, message: 'CPT Test: Kommunikation OK ✅' };
-                } else if (isPushover) {
-                    // Pushover ignores user here, it is configured inside the adapter instance
-                    payload = { message: 'CPT Test: Kommunikation OK ✅', sound: '' };
-                } else {
-                    payload = { text: 'CPT Test: Kommunikation OK ✅', ...(u ? { user: u } : {}) };
-                }
-
-                this.log.info(`UI TEST channel: inst=${inst}, user=${u || '-'}, label=${label || '-'}`);
-                this.sendTo(inst, 'send', payload, obj.callback ? obj.callback : undefined);
-
-                if (obj.callback) this.sendTo(obj.from, obj.command, { result: 'ok' }, obj.callback);
-            } catch (e) {
-                if (obj.callback) this.sendTo(obj.from, obj.command, { error: e.message }, obj.callback);
-            }
-            return;
-        }
-
-        // Test a station row (Stationen tab)
-        if (obj.command === 'testStation') {
-            const name = (obj.message?.name || '').toString().trim();
-            if (!name) {
-                if (obj.callback) this.sendTo(obj.from, obj.command, { error: 'Kein Stations-Name gesetzt' }, obj.callback);
-                return;
-            }
-
-            try {
-                // try direct lookup
-                let stationPrefix = this.stationPrefixByName?.[name];
-
-                // Fallback: search by stored states if map not yet filled (e.g. right after install)
-                if (!stationPrefix) {
-                    const nameStates = await this.getStatesAsync(this.namespace + '.stations.*.*.name');
-                    for (const [id, st] of Object.entries(nameStates || {})) {
-                        if (st && st.val && String(st.val).trim() === name) {
-                            // id = cpt.0.stations.city.station.name -> prefix without namespace and without ".name"
-                            const parts = id.replace(this.namespace + '.', '').split('.');
-                            stationPrefix = parts.slice(0, 3).join('.');
-                            break;
-                        }
-                    }
-                }
-
-                if (!stationPrefix) {
-                    this.log.warn(`UI TEST station: Station nicht gefunden: ${name}`);
-                    if (obj.callback) this.sendTo(obj.from, obj.command, { error: 'Station nicht gefunden' }, obj.callback);
-                    return;
-                }
-
-                this.log.info(`UI TEST station: ${stationPrefix} ausgelöst`);
-                await this.sendTestNotifyForPrefix(stationPrefix);
-
-                if (obj.callback) this.sendTo(obj.from, obj.command, { result: 'ok' }, obj.callback);
-            } catch (e) {
-                this.log.warn(`UI TEST station error for ${name}: ${e.message}`);
-                if (obj.callback) this.sendTo(obj.from, obj.command, { error: e.message }, obj.callback);
-            }
-            return;
-        }
-    }
 
             try {
                                                 const inst = instance;
