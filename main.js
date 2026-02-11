@@ -365,25 +365,30 @@ class CptAdapter extends utils.Adapter {
     }
 
     async onMessage(obj) {
-        if (!obj) return;
+        try {
+            if (!obj || !obj.command) return;
 
-        if (obj.command === 'testChannel') {
-            const instance = (obj.message?.instance || '').toString().trim();
-            const user = (obj.message?.user || '').toString().trim();
-            const label = (obj.message?.label || '').toString().trim();
+            // Helpful debug
+            this.log.debug(`onMessage: command=${obj.command}, from=${obj.from}`);
 
-            if (!instance) {
-                obj.callback && this.sendTo(obj.from, obj.command, { error: 'Kein Adapter-Instanz gesetzt' }, obj.callback);
-                return;
-            }
+            if (obj.command === 'testChannel') {
+                const instance = (obj.message?.instance || '').toString().trim();
+                const user = (obj.message?.user || '').toString().trim();
+                const label = (obj.message?.label || '').toString().trim();
 
-            try {
-                                                const inst = instance;
+                if (!instance) {
+                    obj.callback && this.sendTo(obj.from, obj.command, { error: 'Kein Adapter-Instanz gesetzt' }, obj.callback);
+                    return;
+                }
+
+                const inst = instance;
                 const u = user;
                 const lbl = label;
+
                 const isTelegram = inst.startsWith('telegram.');
-                const isWhatsAppCmb = inst.startsWith('whatsapp-cmb.');
+                const isWhatsAppCmb = inst.startsWith('whatsapp-cmb.') || inst.startsWith('open-wa.');
                 const isPushover = inst.startsWith('pushover.');
+
                 let payload;
                 if (isTelegram) {
                     payload = { text: 'CPT Test: Kommunikation OK ✅', ...(u ? { user: u } : {}) };
@@ -398,8 +403,9 @@ class CptAdapter extends utils.Adapter {
                         channelLabel: lbl || undefined,
                     };
                 } else if (isPushover) {
-                payload = { message: 'CPT Test: Kommunikation OK ✅', sound: '' };
-            } else {
+                    payload = { message: 'CPT Test: Kommunikation OK ✅', sound: '' };
+                } else {
+                    // generic fallback
                     payload = {
                         text: 'CPT Test: Kommunikation OK ✅',
                         user: u || undefined,
@@ -411,35 +417,35 @@ class CptAdapter extends utils.Adapter {
                 }
                 Object.keys(payload).forEach((k) => payload[k] === undefined && delete payload[k]);
 
-                // Send to target notification adapter
                 this.sendTo(instance, 'send', payload);
 
-                // Reply to admin UI (toast)
                 obj.callback && this.sendTo(
                     obj.from,
                     obj.command,
                     { data: { result: `Test an ${instance} gesendet${user ? ' (' + user + ')' : ''}` } },
                     obj.callback
                 );
-            } catch (e) {
-                obj.callback && this.sendTo(obj.from, obj.command, { error: e.message }, obj.callback);
-            }
-            
-        if (obj.command === 'testStation') {
-            const name = (obj.message?.name || '').toString().trim();
-            if (!name) {
-                obj.callback && this.sendTo(obj.from, obj.command, { error: 'Kein Stations-Name gesetzt' }, obj.callback);
                 return;
             }
 
-            try {
-                let stationPrefix = this.stationPrefixByName[name];
+            if (obj.command === 'testStation') {
+                const nameRaw = (obj.message?.name || obj.message?.stationName || '').toString().trim();
+                const nameKey = nameRaw.toLowerCase();
+
+                if (!nameRaw) {
+                    obj.callback && this.sendTo(obj.from, obj.command, { error: 'Kein Stations-Name gesetzt' }, obj.callback);
+                    return;
+                }
+
+                this.log.info(`UI TEST Station Button: ${nameRaw}`);
+
+                let stationPrefix = this.stationPrefixByName?.[nameKey];
 
                 // Fallback: search by stored states if not in map yet
                 if (!stationPrefix) {
                     const nameStates = await this.getStatesAsync(this.namespace + '.stations.*.*.name');
                     for (const [id, st] of Object.entries(nameStates || {})) {
-                        if (st && st.val && String(st.val) === name) {
+                        if (st && st.val && String(st.val).toLowerCase() === nameKey) {
                             stationPrefix = id.replace(this.namespace + '.', '').replace(/\.name$/, '');
                             break;
                         }
@@ -455,15 +461,18 @@ class CptAdapter extends utils.Adapter {
                 obj.callback && this.sendTo(
                     obj.from,
                     obj.command,
-                    { data: { result: `Test für ${name} gesendet` } },
+                    { data: { result: `Test für ${nameRaw} gesendet` } },
                     obj.callback
                 );
-            } catch (e) {
-                obj.callback && this.sendTo(obj.from, obj.command, { error: e.message }, obj.callback);
+                return;
             }
-            return;
-        }
-return;
+        } catch (e) {
+            this.log.warn(`onMessage error: ${e.message}`);
+            try {
+                obj?.callback && this.sendTo(obj.from, obj.command, { error: e.message }, obj.callback);
+            } catch {
+                // ignore
+            }
         }
     }
 
@@ -538,7 +547,7 @@ return;
 
             const stationKey = this.getStationKey(st);
             const stationPrefix = `stations.${cityKey}.${stationKey}`;
-            this.stationPrefixByName[st.name] = stationPrefix;
+            this.stationPrefixByName[String(st.name).toLowerCase()] = stationPrefix;
             await this.ensureStationObjects(stationPrefix, st);
             await this.setStateAsync(`${stationPrefix}.freePorts`, { val: 0, ack: true });
         }
