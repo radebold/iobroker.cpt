@@ -75,16 +75,14 @@
             },
             {
               "type": "sendTo",
-              "attr": "_test",
-              "title": {
-                "en": "Test",
-                "de": "Test"
-              },
-              "width": 80,
-              "variant": "outlined",
-              "icon": "send",
               "command": "testStation",
-              "jsonData": "{\"name\":\"${data.name}\",\"deviceId1\":\"${data.deviceId1}\",\"deviceId2\":\"${data.deviceId2}\"}"
+              "icon": "send",
+              "variant": "outlined",
+              "width": 80,
+              "tooltip": "Test Notify",
+              "data": {
+                "stationName": "${data.name}"
+              }
             }
           ],
           "addRow": true,
