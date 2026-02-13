@@ -3,6 +3,19 @@
 const utils = require('@iobroker/adapter-core');
 const axios = require('axios');
 
+
+function parseNumberLocale(v) {
+    if (v === null || v === undefined) return NaN;
+    if (typeof v === 'number') return v;
+    const s = String(v).trim();
+    if (!s) return NaN;
+    // handle German decimal comma like "9,56280495"
+    const norm = s.replace(/\s+/g, '').replace(',', '.');
+    const n = Number(norm);
+    return Number.isFinite(n) ? n : NaN;
+}
+
+
 function isTrue(v) {
     return v === true || v === 'true' || v === 1 || v === '1' || v === 'on' || v === 'yes';
 }
@@ -403,8 +416,8 @@ class CptAdapter extends utils.Adapter {
         const lat = this.carLatStateId ? await this.getForeignStateAsync(this.carLatStateId).catch(() => null) : null;
         const lon = this.carLonStateId ? await this.getForeignStateAsync(this.carLonStateId).catch(() => null) : null;
 
-        const latN = lat && lat.val !== undefined ? Number(lat.val) : NaN;
-        const lonN = lon && lon.val !== undefined ? Number(lon.val) : NaN;
+        const latN = lat && lat.val !== undefined ? parseNumberLocale(lat.val) : NaN;
+        const lonN = lon && lon.val !== undefined ? parseNumberLocale(lon.val) : NaN;
         if (Number.isFinite(latN) && Number.isFinite(lonN)) {
             this.carLat = latN;
             this.carLon = lonN;
@@ -416,8 +429,8 @@ class CptAdapter extends utils.Adapter {
     }
 
     async updateCarPosition(lat, lon, source) {
-        const latN = Number(lat);
-        const lonN = Number(lon);
+        const latN = parseNumberLocale(lat);
+        const lonN = parseNumberLocale(lon);
         if (!Number.isFinite(latN) || !Number.isFinite(lonN)) return;
         this.carLat = latN;
         this.carLon = lonN;
@@ -432,7 +445,7 @@ class CptAdapter extends utils.Adapter {
     async initCarSoc() {
         if (!this.carSocStateId) return;
         const st = await this.getForeignStateAsync(this.carSocStateId).catch(() => null);
-        const soc = st && st.val !== undefined ? Number(st.val) : NaN;
+        const soc = st && st.val !== undefined ? parseNumberLocale(st.val) : NaN;
         if (Number.isFinite(soc)) {
             this.carSoc = soc;
             await this.setStateAsync('car.soc', { val: soc, ack: true });
@@ -441,7 +454,7 @@ class CptAdapter extends utils.Adapter {
     }
 
     async updateCarSoc(soc, source) {
-        const socN = Number(soc);
+        const socN = parseNumberLocale(soc);
         if (!Number.isFinite(socN)) return;
         this.carSoc = socN;
         await this.setStateAsync('car.soc', { val: socN, ack: true });
@@ -924,10 +937,16 @@ class CptAdapter extends utils.Adapter {
         const root = this.namespace + '.stations.';
         const all = await this.getStatesAsync(root + '*');
 
-        const prefixes = Object.keys(all || {})
+        const prefixesAll = Object.keys(all || {})
             .filter((k) => k.endsWith('.name') && all[k] && all[k].val !== undefined)
             .map((k) => k.replace(this.namespace + '.', '').replace(/\.name$/, ''))
             .sort((a, b) => a.localeCompare(b));
+
+        // Only show active stations in VIS (filter out disabled stations marked as 'deaktiviert')
+        const prefixes = prefixesAll.filter((p) => {
+            const st = all[this.namespace + '.' + p + '.statusDerived']?.val;
+            return String(st || '').toLowerCase() !== 'deaktiviert';
+        });
 
         const html = this.renderStationsHtml(prefixes, all);
         await this.ensureVisHtmlObject();
