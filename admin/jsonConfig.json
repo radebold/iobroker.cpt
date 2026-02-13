@@ -37,16 +37,6 @@
               "default": true
             },
             {
-              "type": "checkbox",
-              "attr": "notifyOnAvailable",
-              "title": {
-                "en": "Notify",
-                "de": "Notify"
-              },
-              "width": 70,
-              "default": false
-            },
-            {
               "type": "text",
               "attr": "name",
               "title": {
@@ -173,6 +163,66 @@
           "addRow": true,
           "deleteRow": true,
           "compact": true
+        }
+      }
+    },
+    "subscriptions": {
+      "type": "panel",
+      "label": {
+        "en": "Subscriptions",
+        "de": "Abos"
+      },
+      "items": {
+        "subscriptions": {
+          "type": "table",
+          "label": {
+            "en": "Subscriptions",
+            "de": "Benachrichtigungen"
+          },
+          "newRow": true,
+          "allowAdd": true,
+          "allowDelete": true,
+          "allowEdit": true,
+          "sortable": true,
+          "items": [
+            {
+              "type": "checkbox",
+              "attr": "enabled",
+              "title": {
+                "en": "Active",
+                "de": "Aktiv"
+              },
+              "default": true,
+              "width": 80
+            },
+            {
+              "type": "text",
+              "attr": "station",
+              "title": {
+                "en": "Station (Name)",
+                "de": "Station (Name)"
+              },
+              "width": 250
+            },
+            {
+              "type": "text",
+              "attr": "recipient",
+              "title": {
+                "en": "Recipient Name",
+                "de": "Empfänger-Name"
+              },
+              "width": 200
+            },
+            {
+              "type": "text",
+              "attr": "note",
+              "title": {
+                "en": "Note",
+                "de": "Notiz"
+              },
+              "width": 200
+            }
+          ]
         }
       }
     }
