@@ -50,6 +50,19 @@ class CptAdapter extends utils.Adapter {
         return (c1 || c2 || 'Unbekannt').toString().trim() || 'Unbekannt';
     }
 
+    async safeFetch(deviceId) {
+        if (!deviceId) return null;
+        const url = `https://mc.chargepoint.com/map-prod/v3/station/info?deviceId=${deviceId}`;
+        try {
+            this.log.debug(`GET ${url}`);
+            const res = await axios.get(url, { timeout: 12000 });
+            return res.data;
+        } catch (err) {
+            this.log.warn(`Fetch fehlgeschlagen (${deviceId}): ${err.message}`);
+            return null;
+        }
+    }
+
     getStationKey(station) {
         const base = station.name ? station.name : `station_${station.deviceId1}`;
         return this.makeSafeName(base) || `station_${station.deviceId1}`;
@@ -242,12 +255,14 @@ class CptAdapter extends utils.Adapter {
     getChannels() {
         const channels = Array.isArray(this.config.channels) ? this.config.channels : [];
         return channels
-            .filter((c) => c && c.enabled !== false && c.instance)
+            .filter((c) => c && c.instance)
             .map((c) => ({
+                enabled: this.normalizeBool(c.enabled),
                 instance: String(c.instance).trim(),
                 user: c.user !== undefined && c.user !== null ? String(c.user).trim() : '',
                 label: c.label !== undefined && c.label !== null ? String(c.label).trim() : '',
             }))
+            .filter((c) => c.enabled && c.instance)
             .filter((c) => {
                 const ok = c.instance.startsWith('telegram.') || c.instance.startsWith('whatsapp-cmb.') || c.instance.startsWith('pushover.');
                 if (!ok) this.log.warn(`Kommunikations-Instanz wird ignoriert (nicht erlaubt): ${c.instance}`);
