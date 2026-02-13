@@ -240,19 +240,50 @@ class CptAdapter extends utils.Adapter {
     }
 
     getChannels() {
-        const channels = Array.isArray(this.config.channels) ? this.config.channels : [];
-        return channels
-            .filter((c) => c && c.enabled !== false && c.instance)
+        // Config can come in different shapes (array/object/string) depending on admin/jsonConfig versions
+        const normalizeBool = (v, def = true) => {
+            if (v === undefined || v === null) return def;
+            if (typeof v === 'boolean') return v;
+            if (typeof v === 'number') return v !== 0;
+            if (typeof v === 'string') {
+                const s = v.trim().toLowerCase();
+                if (['false', '0', 'no', 'off', 'n'].includes(s)) return false;
+                if (['true', '1', 'yes', 'on', 'y'].includes(s)) return true;
+                return def;
+            }
+            return def;
+        };
+
+        let raw = this.config.channels;
+
+        // fallback aliases (older betas / potential renames)
+        if (raw === undefined) raw = this.config.communication;
+        if (raw === undefined) raw = this.config.notifyChannels;
+
+        // sometimes stored as JSON string
+        if (typeof raw === 'string') {
+            try {
+                const parsed = JSON.parse(raw);
+                raw = parsed;
+            } catch (e) {
+                raw = [];
+            }
+        }
+
+        // sometimes stored as object { channels: [...] }
+        if (raw && !Array.isArray(raw) && typeof raw === 'object' && Array.isArray(raw.channels)) {
+            raw = raw.channels;
+        }
+
+        const arr = Array.isArray(raw) ? raw : [];
+        return arr
+            .filter((c) => c && normalizeBool(c.enabled, true) && c.instance)
             .map((c) => ({
                 instance: String(c.instance).trim(),
+                // receiver: phone/chatId/user depending on adapter
                 user: c.user !== undefined && c.user !== null ? String(c.user).trim() : '',
                 label: c.label !== undefined && c.label !== null ? String(c.label).trim() : '',
-            }))
-            .filter((c) => {
-                const ok = c.instance.startsWith('telegram.') || c.instance.startsWith('whatsapp-cmb.') || c.instance.startsWith('pushover.');
-                if (!ok) this.log.warn(`Kommunikations-Instanz wird ignoriert (nicht erlaubt): ${c.instance}`);
-                return ok;
-            });
+            }));
     }
 
 
@@ -484,6 +515,15 @@ async sendMessageToChannels(text, ctx = {}) {
 async onReady() {
         this.log.info('Adapter CPT gestartet');
         this.log.info('Konfiguration: ' + JSON.stringify(this.config));
+        try {
+            const raw = this.config.channels;
+            const rawType = Array.isArray(raw) ? 'array' : (raw === null ? 'null' : typeof raw);
+            this.log.info(`Kommunikationskanäle raw: type=${rawType}, len=${Array.isArray(raw) ? raw.length : 'n/a'}`);
+            const ch = this.getChannels();
+            this.log.info(`Kommunikationskanäle aktiv: ${ch.length}`);
+        } catch (e) {
+            this.log.warn('Kommunikationskanäle: konnte Config nicht auswerten: ' + e.message);
+        }
 
         await this.ensureToolsObjects();
         this.subscribeStates('tools.export');
