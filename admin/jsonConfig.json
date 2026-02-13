@@ -226,6 +226,110 @@
           ]
         }
       }
+    },
+    "car": {
+      "type": "panel",
+      "label": {
+        "de": "Auto",
+        "en": "Car"
+      },
+      "items": {
+        "carLatStateId": {
+          "type": "text",
+          "label": {
+            "de": "State-ID Latitude (extern)",
+            "en": "Latitude state id (foreign)"
+          },
+          "help": {
+            "de": "Optional: Datenpunkt mit Latitude deines Autos (z. B. aus Home Assistant / Tesla / etc.).",
+            "en": "Optional: data point containing your car latitude."
+          }
+        },
+        "carLonStateId": {
+          "type": "text",
+          "label": {
+            "de": "State-ID Longitude (extern)",
+            "en": "Longitude state id (foreign)"
+          },
+          "help": {
+            "de": "Optional: Datenpunkt mit Longitude deines Autos.",
+            "en": "Optional: data point containing your car longitude."
+          }
+        },
+        "carSocStateId": {
+          "type": "text",
+          "label": {
+            "de": "State-ID Ladestand (SoC %) (extern)",
+            "en": "SoC state id (percent) (foreign)"
+          },
+          "help": {
+            "de": "Optional: Datenpunkt mit Ladestand in Prozent (z. B. 23.5). Wird für Benachrichtigungs-Filter genutzt.",
+            "en": "Optional: data point containing state of charge in percent. Used for notification filters."
+          }
+        },
+        "carLat": {
+          "type": "number",
+          "label": {
+            "de": "Latitude (statisch)",
+            "en": "Latitude (static)"
+          },
+          "help": {
+            "de": "Optional: Feste Latitude. Wird als initialer Wert genutzt, wenn gesetzt.",
+            "en": "Optional: Static latitude. Used as initial value if set."
+          }
+        },
+        "carLon": {
+          "type": "number",
+          "label": {
+            "de": "Longitude (statisch)",
+            "en": "Longitude (static)"
+          },
+          "help": {
+            "de": "Optional: Feste Longitude. Wird als initialer Wert genutzt, wenn gesetzt.",
+            "en": "Optional: Static longitude. Used as initial value if set."
+          }
+        },
+        "notifySocBelow": {
+          "type": "number",
+          "min": 0,
+          "max": 100,
+          "default": 30,
+          "label": {
+            "de": "Notify nur bei SoC < (%)",
+            "en": "Notify only if SoC < (%)"
+          },
+          "help": {
+            "de": "Benachrichtigung wird nur gesendet, wenn der Auto-Ladestand (SoC) unter diesem Wert liegt.",
+            "en": "Notification is sent only if car SoC is below this value."
+          }
+        },
+        "notifyMaxDistanceM": {
+          "type": "number",
+          "min": 0,
+          "default": 500,
+          "label": {
+            "de": "Notify nur bei Distanz <= (m)",
+            "en": "Notify only if distance <= (m)"
+          },
+          "help": {
+            "de": "Benachrichtigung wird nur gesendet, wenn die Distanz zur Station <= diesem Wert ist (Auto-Lat/Lon muss vorhanden sein).",
+            "en": "Notification is sent only if distance to the station is <= this value (car lat/lon required)."
+          }
+        },
+        "notifyCooldownMin": {
+          "type": "number",
+          "min": 0,
+          "default": 15,
+          "label": {
+            "de": "Notify Cooldown (Minuten)",
+            "en": "Notify cooldown (minutes)"
+          },
+          "help": {
+            "de": "Mindestabstand zwischen zwei Benachrichtigungen pro Station. 0 = kein Cooldown.",
+            "en": "Minimum time between notifications per station. 0 = no cooldown."
+          }
+        }
+      }
     }
   }
 }

@@ -13,9 +13,41 @@ class CptAdapter extends utils.Adapter {
 
         this.pollInterval = null;
 
+        this.visHtmlTimer = null;
+        this.visHtmlObjectId = (this.config && this.config.visHtmlObjectId) || '0_userdata.0.Vis.ChargePoint.htmlStations';
+        this.visHtmlEnabled = (this.config && this.config.visHtmlEnabled !== undefined) ? isTrue(this.config.visHtmlEnabled) : true;
+        this.visHtmlDebounceMs = Number((this.config && this.config.visHtmlDebounceMs) || 800);
+
         // transition detection (per stationPrefix)
         this.lastFreePortsByStation = {};
         this.stationPrefixByName = {};
+
+        // car position (optional) - can be sourced from foreign states
+        this.carLat = null;
+        this.carLon = null;
+        this.carSoc = null;
+        this.carLatStateId = (this.config && this.config.carLatStateId) ? String(this.config.carLatStateId).trim() : '';
+        this.carLonStateId = (this.config && this.config.carLonStateId) ? String(this.config.carLonStateId).trim() : '';
+        this.carSocStateId = (this.config && this.config.carSocStateId) ? String(this.config.carSocStateId).trim() : '';
+        this.carLatStatic = (this.config && this.config.carLat !== undefined && this.config.carLat !== null && this.config.carLat !== '') ? Number(this.config.carLat) : null;
+        this.carLonStatic = (this.config && this.config.carLon !== undefined && this.config.carLon !== null && this.config.carLon !== '') ? Number(this.config.carLon) : null;
+
+        // Notification filters
+        this.notifySocBelow = (this.config && this.config.notifySocBelow !== undefined && this.config.notifySocBelow !== null && this.config.notifySocBelow !== '')
+            ? Number(this.config.notifySocBelow)
+            : 30;
+        this.notifyMaxDistanceM = (this.config && this.config.notifyMaxDistanceM !== undefined && this.config.notifyMaxDistanceM !== null && this.config.notifyMaxDistanceM !== '')
+            ? Number(this.config.notifyMaxDistanceM)
+            : 500;
+
+        this.notifyCooldownMin = (this.config && this.config.notifyCooldownMin !== undefined && this.config.notifyCooldownMin !== null && this.config.notifyCooldownMin !== '')
+            ? Number(this.config.notifyCooldownMin)
+            : 15;
+
+        // per-station notify memory to avoid duplicates
+        this.notifyMetaByStation = {}; // { [stationPrefixRel]: { inRange:boolean, notified:boolean, lastSent:number } }
+        this.stationPrefixes = [];
+        this.stationInfoByPrefix = {}; // { [prefix]: { city, name } }
 
         this.on('ready', this.onReady.bind(this));
         this.on('stateChange', this.onStateChange.bind(this));
@@ -77,6 +109,18 @@ class CptAdapter extends utils.Adapter {
             if (!Number.isNaN(latN) && !Number.isNaN(lonN)) return { lat: latN, lon: lonN };
         }
         return null;
+    }
+
+    haversineKm(lat1, lon1, lat2, lon2) {
+        const toRad = (d) => (d * Math.PI) / 180;
+        const R = 6371; // km
+        const dLat = toRad(lat2 - lat1);
+        const dLon = toRad(lon2 - lon1);
+        const a =
+            Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+            Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) * Math.sin(dLon / 2);
+        const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+        return R * c;
     }
 
     async updateStateIfChanged(id, val, ack = true) {
@@ -208,7 +252,14 @@ class CptAdapter extends utils.Adapter {
 
     async notifySubscribers({ stationPrefixRel, city, stationName, freePorts, portCount, isTest = false }) {
         const subs = this.getSubscriptions();
-        const matches = subs.filter((s) => s && isTrue(s.enabled) && String(s.station) === String(stationPrefixRel));
+        const matches = subs.filter((s) => {
+            if (!s || !isTrue(s.enabled)) return false;
+            const st = String(s.station || '').trim();
+            if (!st) return false;
+            if (st === '__ALL__') return true;
+            if (st.startsWith('name:')) return String(stationName || '').toLowerCase() === st.replace(/^name:/, '').trim().toLowerCase();
+            return st === String(stationPrefixRel);
+        });
 
         // If no subscriptions exist, fall back to “all active channels” (keeps old behaviour)
         if (!matches.length) {
@@ -306,6 +357,229 @@ class CptAdapter extends utils.Adapter {
         await this.setStateAsync('tools.testNotifyAll', { val: false, ack: true });
     }
 
+    async ensureCarObjects() {
+        await this.setObjectNotExistsAsync('car', { type: 'channel', common: { name: 'Auto' }, native: {} });
+        await this.setObjectNotExistsAsync('car.lat', {
+            type: 'state',
+            common: { name: 'Auto Latitude', type: 'number', role: 'value.gps.latitude', read: true, write: false },
+            native: {},
+        });
+        await this.setObjectNotExistsAsync('car.lon', {
+            type: 'state',
+            common: { name: 'Auto Longitude', type: 'number', role: 'value.gps.longitude', read: true, write: false },
+            native: {},
+        });
+        await this.setObjectNotExistsAsync('car.soc', {
+            type: 'state',
+            common: { name: 'Auto Ladestand (SoC)', type: 'number', role: 'value.battery', unit: '%', read: true, write: false },
+            native: {},
+        });
+        await this.setObjectNotExistsAsync('car.source', {
+            type: 'state',
+            common: { name: 'Quelle (State-ID oder static)', type: 'string', role: 'text', read: true, write: false },
+            native: {},
+        });
+        await this.setObjectNotExistsAsync('car.lastUpdate', {
+            type: 'state',
+            common: { name: 'Letztes Update', type: 'string', role: 'date', read: true, write: false },
+            native: {},
+        });
+    }
+
+    async initCarPosition() {
+        // static values from config have priority as initial values
+        if (typeof this.carLatStatic === 'number' && Number.isFinite(this.carLatStatic) &&
+            typeof this.carLonStatic === 'number' && Number.isFinite(this.carLonStatic)) {
+            this.carLat = this.carLatStatic;
+            this.carLon = this.carLonStatic;
+            await this.setStateAsync('car.lat', { val: this.carLat, ack: true });
+            await this.setStateAsync('car.lon', { val: this.carLon, ack: true });
+            await this.setStateAsync('car.source', { val: 'static', ack: true });
+            await this.setStateAsync('car.lastUpdate', { val: new Date().toISOString(), ack: true });
+            return;
+        }
+
+        // try to read foreign states (if configured)
+        const lat = this.carLatStateId ? await this.getForeignStateAsync(this.carLatStateId).catch(() => null) : null;
+        const lon = this.carLonStateId ? await this.getForeignStateAsync(this.carLonStateId).catch(() => null) : null;
+
+        const latN = lat && lat.val !== undefined ? Number(lat.val) : NaN;
+        const lonN = lon && lon.val !== undefined ? Number(lon.val) : NaN;
+        if (Number.isFinite(latN) && Number.isFinite(lonN)) {
+            this.carLat = latN;
+            this.carLon = lonN;
+            await this.setStateAsync('car.lat', { val: this.carLat, ack: true });
+            await this.setStateAsync('car.lon', { val: this.carLon, ack: true });
+            await this.setStateAsync('car.source', { val: `${this.carLatStateId || ''} | ${this.carLonStateId || ''}`.trim(), ack: true });
+            await this.setStateAsync('car.lastUpdate', { val: new Date().toISOString(), ack: true });
+        }
+    }
+
+    async updateCarPosition(lat, lon, source) {
+        const latN = Number(lat);
+        const lonN = Number(lon);
+        if (!Number.isFinite(latN) || !Number.isFinite(lonN)) return;
+        this.carLat = latN;
+        this.carLon = lonN;
+        await this.setStateAsync('car.lat', { val: this.carLat, ack: true });
+        await this.setStateAsync('car.lon', { val: this.carLon, ack: true });
+        await this.setStateAsync('car.source', { val: source || '', ack: true });
+        await this.setStateAsync('car.lastUpdate', { val: new Date().toISOString(), ack: true });
+        await this.updateDistancesForAllStations();
+        await this.handleCarContextChange('posChange');
+    }
+
+    async initCarSoc() {
+        if (!this.carSocStateId) return;
+        const st = await this.getForeignStateAsync(this.carSocStateId).catch(() => null);
+        const soc = st && st.val !== undefined ? Number(st.val) : NaN;
+        if (Number.isFinite(soc)) {
+            this.carSoc = soc;
+            await this.setStateAsync('car.soc', { val: soc, ack: true });
+            await this.setStateAsync('car.lastUpdate', { val: new Date().toISOString(), ack: true });
+        }
+    }
+
+    async updateCarSoc(soc, source) {
+        const socN = Number(soc);
+        if (!Number.isFinite(socN)) return;
+        this.carSoc = socN;
+        await this.setStateAsync('car.soc', { val: socN, ack: true });
+        if (source) {
+            // Keep car.source focused on mapping info
+            await this.setStateAsync('car.source', { val: source, ack: true });
+        }
+        await this.setStateAsync('car.lastUpdate', { val: new Date().toISOString(), ack: true });
+        await this.handleCarContextChange('socChange');
+    }
+
+    async passesNotifyFilters(stationPrefixRel) {
+        const res = { ok: true, socOk: true, distanceOk: true, soc: this.carSoc, distanceM: null };
+
+        const socTh = Number(this.notifySocBelow);
+        if (Number.isFinite(socTh)) {
+            if (typeof this.carSoc !== 'number' || !Number.isFinite(this.carSoc)) {
+                res.ok = false;
+                res.socOk = false;
+            } else {
+                res.socOk = this.carSoc < socTh;
+                res.ok = res.ok && res.socOk;
+            }
+        }
+
+        const distMax = Number(this.notifyMaxDistanceM);
+        if (Number.isFinite(distMax)) {
+            const st = await this.getStateAsync(`${stationPrefixRel}.distance.m`).catch(() => null);
+            const d = st && st.val !== undefined && st.val !== null ? Number(st.val) : NaN;
+            res.distanceM = Number.isFinite(d) ? d : null;
+            if (!Number.isFinite(d)) {
+                res.ok = false;
+                res.distanceOk = false;
+            } else {
+                res.distanceOk = d <= distMax;
+                res.ok = res.ok && res.distanceOk;
+            }
+        }
+
+        return res;
+    }
+
+
+    getNotifyMeta(stationPrefixRel) {
+        if (!this.notifyMetaByStation[stationPrefixRel]) {
+            this.notifyMetaByStation[stationPrefixRel] = { inRange: false, notified: false, lastSent: 0 };
+        }
+        return this.notifyMetaByStation[stationPrefixRel];
+    }
+
+    getExitDistanceM() {
+        const enter = Number(this.notifyMaxDistanceM);
+        if (!Number.isFinite(enter) || enter <= 0) return null;
+        return Math.round(enter * 1.1); // 500 -> 550
+    }
+
+    async computeInRange(stationPrefixRel) {
+        const meta = this.getNotifyMeta(stationPrefixRel);
+        const enter = Number(this.notifyMaxDistanceM);
+        const exit = this.getExitDistanceM();
+
+        const st = await this.getStateAsync(`${stationPrefixRel}.distance.m`).catch(() => null);
+        const d = st && st.val !== undefined && st.val !== null ? Number(st.val) : NaN;
+        if (!Number.isFinite(d)) {
+            // If we cannot determine distance, treat as out of range
+            const prev = meta.inRange;
+            meta.inRange = false;
+            return { prev, now: false, entered: false, exited: prev, distanceM: null };
+        }
+
+        const prev = meta.inRange;
+        let now = prev;
+
+        if (prev) {
+            if (Number.isFinite(exit) && d >= exit) now = false;
+        } else {
+            if (Number.isFinite(enter) && d <= enter) now = true;
+        }
+
+        meta.inRange = now;
+        return { prev, now, entered: !prev && now, exited: prev && !now, distanceM: d };
+    }
+
+    stationHasNotifyTarget(stationPrefixRel, stationName) {
+        const subs = this.getSubscriptions();
+        const hasSubs = subs.some((s) => {
+            if (!s || !isTrue(s.enabled)) return false;
+            const stVal = String(s.station || '').trim();
+            if (!stVal) return false;
+            if (stVal === '__ALL__') return true;
+            if (stVal.startsWith('name:')) return String(stationName || '').toLowerCase() === stVal.replace(/^name:/, '').trim().toLowerCase();
+            return stVal === String(stationPrefixRel);
+        });
+        return hasSubs;
+    }
+
+    async attemptNotifyForStation({ stationPrefixRel, city, stationName, freePorts, portCount, reason }) {
+        const meta = this.getNotifyMeta(stationPrefixRel);
+
+        // Reset notified when station is not free anymore
+        if (!(Number(freePorts) > 0)) {
+            meta.notified = false;
+            return;
+        }
+
+        // Only one notification per "free phase"
+        if (meta.notified) return;
+
+        // Cooldown (per station)
+        const cdMin = Number(this.notifyCooldownMin) || 0;
+        if (cdMin > 0 && meta.lastSent && Date.now() - meta.lastSent < cdMin * 60 * 1000) {
+            return;
+        }
+
+        // Station toggle OR subscriptions decide whether station is relevant
+        const notifyState = await this.getStateAsync(`${stationPrefixRel}.notifyOnAvailable`).catch(() => null);
+        const notifyEnabled = notifyState?.val === true;
+        const hasSubs = this.stationHasNotifyTarget(stationPrefixRel, stationName);
+
+        if (!notifyEnabled && !hasSubs) return;
+
+        // Filters: SoC + distance must be determinable and pass
+        const f = await this.passesNotifyFilters(stationPrefixRel);
+        if (!f.ok) {
+            const reasons = [];
+            if (!f.socOk) reasons.push(`SoC nicht unter ${this.notifySocBelow}% (SoC=${f.soc ?? 'n/a'})`);
+            if (!f.distanceOk) reasons.push(`Distanz > ${this.notifyMaxDistanceM}m (dist=${f.distanceM ?? 'n/a'})`);
+            this.log.debug(`Notify übersprungen (${reason}): ${stationName} (${city}) – ${reasons.join(', ')}`);
+            return;
+        }
+
+        await this.notifySubscribers({ stationPrefixRel, city, stationName, freePorts, portCount, isTest: false });
+        meta.notified = true;
+        meta.lastSent = Date.now();
+        this.log.info(`Notify (${reason}): ${stationName} (${city}) freePorts=${freePorts}/${portCount} (SoC=${f.soc ?? 'n/a'}%, dist=${f.distanceM ?? 'n/a'}m)`);
+    }
+
+    
     async ensureStationObjects(stationPrefix, station, cityName) {
         await this.setObjectNotExistsAsync(stationPrefix, { type: 'channel', common: { name: station.name }, native: {} });
 
@@ -341,6 +615,18 @@ class CptAdapter extends utils.Adapter {
         await this.setObjectNotExistsAsync(`${stationPrefix}.gps.json`, {
             type: 'state',
             common: { name: 'GPS (JSON)', type: 'string', role: 'json', read: true, write: false },
+            native: {},
+        });
+
+        await this.setObjectNotExistsAsync(`${stationPrefix}.distance`, { type: 'channel', common: { name: 'Entfernung' }, native: {} });
+        await this.setObjectNotExistsAsync(`${stationPrefix}.distance.km`, {
+            type: 'state',
+            common: { name: 'Entfernung (km)', type: 'number', role: 'value.distance', unit: 'km', read: true, write: false },
+            native: {},
+        });
+        await this.setObjectNotExistsAsync(`${stationPrefix}.distance.m`, {
+            type: 'state',
+            common: { name: 'Entfernung (m)', type: 'number', role: 'value.distance', unit: 'm', read: true, write: false },
             native: {},
         });
 
@@ -416,12 +702,19 @@ class CptAdapter extends utils.Adapter {
             await this.ensureCityChannel(`stations.${cityKey}`, city);
             await this.ensureStationObjects(stationPrefix, st, city);
 
+                        // remember station prefixes for car-trigger notifications
+            if (!this.stationPrefixes.includes(stationPrefix)) this.stationPrefixes.push(stationPrefix);
+            this.stationInfoByPrefix[stationPrefix] = { city, name: st.name };
+
             const gps = this.extractGps(data1, data2);
             if (gps) {
                 await this.updateStateIfChanged(`${stationPrefix}.gps.lat`, gps.lat);
                 await this.updateStateIfChanged(`${stationPrefix}.gps.lon`, gps.lon);
                 await this.updateStateIfChanged(`${stationPrefix}.gps.json`, JSON.stringify(gps));
             }
+
+            // distance from car (if available)
+            await this.updateDistanceForStation(stationPrefix, gps);
 
             if (st.enabled === false) {
                 await this.updateStateIfChanged(`${stationPrefix}.statusDerived`, 'deaktiviert');
@@ -464,39 +757,320 @@ class CptAdapter extends utils.Adapter {
                 await this.setStateAsync(`${portPrefix}.lastUpdate`, { val: new Date().toISOString(), ack: true });
             }
 
-            // notify on 0 -> >0
-            if (prevFree !== undefined && Number(prevFree) === 0 && Number(freePorts) > 0) {
-                const notifyState = await this.getStateAsync(`${stationPrefix}.notifyOnAvailable`).catch(() => null);
-                const notifyEnabled = notifyState?.val === true;
+            // notify logic:
+            // 1) station becomes free (0 -> >0) and car is already in range with low SoC
+            // 2) car enters range / SoC drops is handled on car state changes
+            const meta = this.getNotifyMeta(stationPrefix);
 
-                // If any subscription exists for station, we notify regardless of station toggle
-                const subs = this.getSubscriptions();
-                const hasSubs = subs.some((s) => s && isTrue(s.enabled) && String(s.station) === String(stationPrefix));
-
-                if (notifyEnabled || hasSubs) {
-                    await this.notifySubscribers({
-                        stationPrefixRel: stationPrefix,
-                        city,
-                        stationName: st.name,
-                        freePorts,
-                        portCount,
-                        isTest: false,
-                    });
-                    this.log.info(`Notify: ${st.name} (${city}) freePorts ${prevFree} -> ${freePorts}`);
-                }
+            // reset notification when station is not free anymore
+            if (!(Number(freePorts) > 0)) {
+                meta.notified = false;
             }
+
+            if (prevFree !== undefined && Number(prevFree) === 0 && Number(freePorts) > 0) {
+                await this.attemptNotifyForStation({
+                    stationPrefixRel: stationPrefix,
+                    city,
+                    stationName: st.name,
+                    freePorts,
+                    portCount,
+                    reason: 'stationFree',
+                });
+            }
+
             this.lastFreePortsByStation[stationPrefix] = freePorts;
 
+            this.scheduleVisHtmlUpdate('state change');
+
             this.log.debug(`Aktualisiert: ${st.name} city=${city} freePorts=${freePorts}/${portCount} derived=${derived}`);
+        }
+
+        this.scheduleVisHtmlUpdate('poll finished');
+    }
+
+    async updateDistanceForStation(stationPrefixRel, gps) {
+        try {
+            if (!gps || gps.lat === undefined || gps.lon === undefined) return;
+            const latCar = this.carLat;
+            const lonCar = this.carLon;
+            if (typeof latCar !== 'number' || typeof lonCar !== 'number') {
+                // clear distance if previously set
+                await this.updateStateIfChanged(`${stationPrefixRel}.distance.km`, null);
+                await this.updateStateIfChanged(`${stationPrefixRel}.distance.m`, null);
+                return;
+            }
+            const km = this.haversineKm(latCar, lonCar, Number(gps.lat), Number(gps.lon));
+            if (!Number.isFinite(km)) return;
+            const m = Math.round(km * 1000);
+            const kmRound = Math.round(km * 100) / 100;
+            await this.updateStateIfChanged(`${stationPrefixRel}.distance.km`, kmRound);
+            await this.updateStateIfChanged(`${stationPrefixRel}.distance.m`, m);
+        } catch (e) {
+            this.log.debug(`Distanzberechnung fehlgeschlagen (${stationPrefixRel}): ${e.message}`);
+        }
+    }
+
+    async updateDistancesForAllStations() {
+        try {
+            const list = await this.getStatesAsync(this.namespace + '.stations.*.*.gps.json');
+            for (const [id, st] of Object.entries(list || {})) {
+                const relPrefix = id.replace(this.namespace + '.', '').replace(/\.gps\.json$/, '');
+                let gps;
+                try {
+                    gps = st?.val ? JSON.parse(String(st.val)) : null;
+                } catch {
+                    gps = null;
+                }
+                if (gps) await this.updateDistanceForStation(relPrefix, gps);
+            }
+            this.scheduleVisHtmlUpdate('car distance change');
+        } catch (e) {
+            this.log.debug(`updateDistancesForAllStations fehlgeschlagen: ${e.message}`);
+        }
+    }
+
+
+    async handleCarContextChange(reason = 'car') {
+        try {
+            if (!Array.isArray(this.stationPrefixes) || !this.stationPrefixes.length) return;
+
+            // Only proceed if we have a valid SoC (mandatory)
+            if (typeof this.carSoc !== 'number' || !Number.isFinite(this.carSoc)) return;
+
+            for (const prefix of this.stationPrefixes) {
+                // station must currently be free
+                const freeSt = await this.getStateAsync(`${prefix}.freePorts`).catch(() => null);
+                const freePorts = freeSt?.val !== undefined ? Number(freeSt.val) : NaN;
+                if (!Number.isFinite(freePorts) || freePorts <= 0) {
+                    // reset notified when not free (so next free cycle can notify)
+                    this.getNotifyMeta(prefix).notified = false;
+                    continue;
+                }
+
+                // compute in-range transition
+                const range = await this.computeInRange(prefix);
+                const meta = this.getNotifyMeta(prefix);
+
+                // If we just entered, or SoC got low while already inside range, try notify
+                const shouldTry = range.entered || (range.now && reason === 'socChange');
+
+                if (!shouldTry) continue;
+
+                // Need station context
+                const info = this.stationInfoByPrefix[prefix] || {};
+                const portCountSt = await this.getStateAsync(`${prefix}.portCount`).catch(() => null);
+                const portCount = portCountSt?.val !== undefined ? Number(portCountSt.val) : undefined;
+
+                await this.attemptNotifyForStation({
+                    stationPrefixRel: prefix,
+                    city: info.city || prefix.split('.')[1] || '',
+                    stationName: info.name || prefix.split('.').pop(),
+                    freePorts,
+                    portCount,
+                    reason: range.entered ? 'carEntered' : 'socBelow',
+                });
+
+                // If we left range, we do NOT reset meta.notified (one notify per free-phase)
+                if (range.exited) {
+                    meta.inRange = false;
+                }
+            }
+        } catch (e) {
+            this.log.debug(`handleCarContextChange failed: ${e.message}`);
         }
     }
 
     // ---------- ioBroker lifecycle ----------
 
-    async onReady() {
+    
+    // ---------- VIS HTML (server side) ----------
+    scheduleVisHtmlUpdate(reason = '') {
+        if (!this.visHtmlEnabled) return;
+        if (this.visHtmlTimer) clearTimeout(this.visHtmlTimer);
+        this.visHtmlTimer = setTimeout(() => {
+            this.writeVisHtmlObject().catch((e) => this.log.warn(`VIS HTML Update fehlgeschlagen: ${e.message}`));
+        }, this.visHtmlDebounceMs);
+        if (reason) this.log.debug(`VIS HTML Update geplant: ${reason}`);
+    }
+
+    async ensureVisHtmlObject() {
+        if (!this.visHtmlEnabled) return;
+        const id = this.visHtmlObjectId;
+        try {
+            const obj = await this.getForeignObjectAsync(id);
+            if (!obj) {
+                await this.setForeignObjectAsync(id, {
+                    _id: id,
+                    type: 'state',
+                    common: {
+                        name: 'ChargePoint VIS HTML (Stationen + Ports)',
+                        type: 'string',
+                        role: 'html',
+                        read: true,
+                        write: true,
+                    },
+                    native: {},
+                });
+            }
+        } catch (e) {
+            this.log.warn(`Konnte VIS HTML Objekt nicht anlegen (${id}): ${e.message}`);
+        }
+    }
+
+    async writeVisHtmlObject() {
+        if (!this.visHtmlEnabled) return;
+        const id = this.visHtmlObjectId;
+
+        const root = this.namespace + '.stations.';
+        const all = await this.getStatesAsync(root + '*');
+
+        const prefixes = Object.keys(all || {})
+            .filter((k) => k.endsWith('.name') && all[k] && all[k].val !== undefined)
+            .map((k) => k.replace(this.namespace + '.', '').replace(/\.name$/, ''))
+            .sort((a, b) => a.localeCompare(b));
+
+        const html = this.renderStationsHtml(prefixes, all);
+        await this.ensureVisHtmlObject();
+        await this.setForeignStateAsync(id, { val: html, ack: true });
+    }
+
+    renderStationsHtml(prefixes, allStates) {
+        const esc = (v) => (v === null || v === undefined) ? '' : String(v)
+            .replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;');
+
+        const badge = (text, kind) => {
+            const styles = {
+                ok:      'background:rgba(46,204,113,.18); border:1px solid rgba(46,204,113,.45);',
+                warn:    'background:rgba(241,196,15,.18); border:1px solid rgba(241,196,15,.45);',
+                bad:     'background:rgba(231,76,60,.18);  border:1px solid rgba(231,76,60,.45);',
+                neutral: 'background:rgba(255,255,255,.10); border:1px solid rgba(255,255,255,.18);',
+            };
+            const st = styles[kind] || styles.neutral;
+            return `<span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;white-space:nowrap;${st}">${esc(text)}</span>`;
+        };
+
+        const kindFromStatus = (s) => {
+            const t = String(s || '').toLowerCase();
+            if (t.includes('available') || t.includes('frei') || t.includes('online') || t.includes('ok')) return 'ok';
+            if (t.includes('charging') || t.includes('in_use') || t.includes('occupied') || t.includes('belegt')) return 'warn';
+            if (t.includes('fault') || t.includes('offline') || t.includes('error') || t.includes('unavailable') || t.includes('störung')) return 'bad';
+            return 'neutral';
+        };
+
+        const kindFromPort = (s) => {
+            const t = String(s || '').toLowerCase();
+            if (t.includes('available') || t.includes('frei')) return 'ok';
+            if (t.includes('charging') || t.includes('occupied') || t.includes('in_use') || t.includes('belegt')) return 'warn';
+            if (t.includes('fault') || t.includes('offline') || t.includes('error') || t.includes('unavailable')) return 'bad';
+            return 'neutral';
+        };
+
+        const getVal = (relId) => {
+            const full = this.namespace + '.' + relId;
+            const st = allStates[full];
+            return st ? st.val : undefined;
+        };
+
+        const updated = new Date().toLocaleString('de-DE');
+        let out = `
+<div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;font-size:14px;">
+  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
+    <div style="font-weight:800;font-size:16px;">⚡ ChargePoint</div>
+    <div style="opacity:.75;font-size:12px;">Update: ${esc(updated)}</div>
+  </div>
+  <div style="border:1px solid rgba(255,255,255,.12);border-radius:14px;overflow:hidden;background:rgba(0,0,0,.18);box-shadow:0 10px 24px rgba(0,0,0,.28);">
+`;
+
+        if (!prefixes.length) {
+            out += `<div style="padding:12px;">Keine Stationsdaten gefunden.</div></div></div>`;
+            return out;
+        }
+
+        out += `
+    <table style="width:100%;border-collapse:collapse;">
+      <tr style="background:rgba(255,255,255,.06)">
+        <th style="text-align:left;padding:10px;font-size:12px;letter-spacing:.04em;opacity:.85;">ORT</th>
+        <th style="text-align:left;padding:10px;font-size:12px;letter-spacing:.04em;opacity:.85;">STATION</th>
+        <th style="text-align:left;padding:10px;font-size:12px;letter-spacing:.04em;opacity:.85;">STATUS</th>
+        <th style="text-align:left;padding:10px;font-size:12px;letter-spacing:.04em;opacity:.85;">PORTS</th>
+        <th style="text-align:left;padding:10px;font-size:12px;letter-spacing:.04em;opacity:.85;">DISTANZ</th>
+        <th style="text-align:left;padding:10px;font-size:12px;letter-spacing:.04em;opacity:.85;">GPS</th>
+      </tr>
+`;
+
+        for (const p of prefixes) {
+            const city = getVal(p + '.city') ?? '';
+            const name = getVal(p + '.name') ?? p.split('.').pop();
+            const fp = getVal(p + '.freePorts');
+            const pc = getVal(p + '.portCount');
+            const st = getVal(p + '.statusDerived') ?? '';
+
+            const portsSummary = (fp !== undefined && pc !== undefined)
+                ? badge(`${fp}/${pc} frei`, (Number(fp) > 0 ? 'ok' : 'warn'))
+                : badge('—', 'neutral');
+
+            const portBadges = [];
+            const prefixFull = this.namespace + '.' + p + '.ports.';
+            for (const key of Object.keys(allStates)) {
+                if (!key.startsWith(prefixFull) || !key.endsWith('.statusV2')) continue;
+                const m = key.match(/\.ports\.(\d+)\.statusV2$/);
+                if (!m) continue;
+                const n = m[1];
+                const s2 = getVal(p + `.ports.${n}.statusV2`);
+                const s1 = getVal(p + `.ports.${n}.status`);
+                const s = (s2 ?? s1);
+                if (s === undefined) continue;
+                portBadges.push({ n: Number(n), html: badge(`P${n}: ${s}`, kindFromPort(s)) });
+            }
+            portBadges.sort((a, b) => a.n - b.n);
+            const portText = portBadges.length ? portBadges.map(x => x.html).join(' ') : `<span style="opacity:.75;">—</span>`;
+
+            const gpsLat = getVal(p + '.gps.lat');
+            const gpsLon = getVal(p + '.gps.lon');
+            const gpsOk = (gpsLat !== undefined && gpsLon !== undefined);
+            const mapsUrl = gpsOk ? `https://www.google.com/maps?q=${gpsLat},${gpsLon}` : '';
+            const gpsText = gpsOk
+                ? `<a href="${mapsUrl}" target="_blank" style="color:inherit; text-decoration:underline; opacity:.95;">${esc(gpsLat)}, ${esc(gpsLon)}</a>`
+                : `<span style="opacity:.75;">—</span>`;
+
+            const dKm = getVal(p + '.distance.km');
+            const distText = (dKm !== undefined && dKm !== null && dKm !== '')
+                ? badge(`${dKm} km`, 'neutral')
+                : `<span style="opacity:.75;">—</span>`;
+
+            out += `
+      <tr style="border-top:1px solid rgba(255,255,255,.08)">
+        <td style="padding:10px;vertical-align:top;">${esc(city)}</td>
+        <td style="padding:10px;vertical-align:top;font-weight:700;">${esc(name)}</td>
+        <td style="padding:10px;vertical-align:top;">${badge(st || '—', kindFromStatus(st))}</td>
+        <td style="padding:10px;vertical-align:top;">${portsSummary}<div style="margin-top:6px;line-height:1.8;">${portText}</div></td>
+        <td style="padding:10px;vertical-align:top;">${distText}</td>
+        <td style="padding:10px;vertical-align:top;">${gpsText}</td>
+      </tr>
+`;
+        }
+
+        out += `
+    </table>
+  </div>
+</div>`;
+        return out;
+    }
+
+async onReady() {
         this.log.info('Adapter CPT gestartet');
 
         await this.ensureToolsObjects();
+        await this.ensureCarObjects();
+
+        // subscribe to foreign car position states (optional)
+        if (this.carLatStateId) this.subscribeForeignStates(this.carLatStateId);
+        if (this.carLonStateId) this.subscribeForeignStates(this.carLonStateId);
+        if (this.carSocStateId) this.subscribeForeignStates(this.carSocStateId);
+
+        // initialize car position (static or from foreign)
+        await this.initCarPosition();
+        await this.initCarSoc();
 
         this.subscribeStates('tools.export');
         this.subscribeStates('tools.testNotify');
@@ -543,6 +1117,9 @@ class CptAdapter extends utils.Adapter {
 
         await this.updateAllStations(stations);
 
+        // initial VIS HTML write
+        this.scheduleVisHtmlUpdate('initial');
+
         this.pollInterval = setInterval(() => {
             this.updateAllStations(stations).catch((e) => this.log.error(`Polling-Fehler: ${e?.message || e}`));
         }, intervalMin * 60 * 1000);
@@ -551,7 +1128,27 @@ class CptAdapter extends utils.Adapter {
     }
 
     async onStateChange(id, state) {
-        if (!state || state.ack) return;
+        if (!state) return;
+
+        // foreign car position updates (usually ack=true)
+        if (id === this.carLatStateId || id === this.carLonStateId) {
+            const latSt = id === this.carLatStateId ? state : (this.carLatStateId ? await this.getForeignStateAsync(this.carLatStateId).catch(() => null) : null);
+            const lonSt = id === this.carLonStateId ? state : (this.carLonStateId ? await this.getForeignStateAsync(this.carLonStateId).catch(() => null) : null);
+            const lat = latSt && latSt.val !== undefined ? latSt.val : undefined;
+            const lon = lonSt && lonSt.val !== undefined ? lonSt.val : undefined;
+            if (lat !== undefined && lon !== undefined) {
+                await this.updateCarPosition(lat, lon, `${this.carLatStateId} | ${this.carLonStateId}`);
+            }
+            return;
+        }
+
+        // foreign car SoC updates (usually ack=true)
+        if (id === this.carSocStateId) {
+            await this.updateCarSoc(state.val, this.carSocStateId);
+            return;
+        }
+
+        if (state.ack) return;
 
         if (id === `${this.namespace}.tools.export` && state.val === true) {
             await this.doExportStations();
@@ -608,7 +1205,7 @@ class CptAdapter extends utils.Adapter {
         if (obj.command === 'getStations') {
             try {
                 const list = await this.getStatesAsync(this.namespace + '.stations.*.*.name');
-                const opts = [];
+                const opts = [{ value: '__ALL__', label: 'Alle Stationen' }];
                 for (const [id, st] of Object.entries(list || {})) {
                     const rel = id.replace(this.namespace + '.', '').replace(/\.name$/, '');
                     const parts = rel.split('.');
@@ -616,6 +1213,16 @@ class CptAdapter extends utils.Adapter {
                     const stationName = st?.val ? String(st.val) : parts[2];
                     opts.push({ value: rel, label: `${city} / ${stationName}` });
                 }
+                // also add configured stations by name (useful before first poll)
+                const configured = Array.isArray(this.config.stations) ? this.config.stations : [];
+                for (const s of configured) {
+                    const n = s && s.name ? String(s.name).trim() : '';
+                    if (!n) continue;
+                    const val = `name:${n}`;
+                    if (!opts.some((o) => o.value === val)) opts.push({ value: val, label: `(Name) ${n}` });
+                }
+
+                opts.sort((a, b) => a.label.localeCompare(b.label, 'de'));
                 obj.callback && this.sendTo(obj.from, obj.command, { options: opts }, obj.callback);
             } catch {
                 obj.callback && this.sendTo(obj.from, obj.command, { options: [] }, obj.callback);

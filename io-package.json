@@ -1,7 +1,7 @@
 {
   "common": {
     "name": "cpt",
-    "version": "0.4.0-beta.3",
+    "version": "0.6.2",
     "title": "CPT ChargePoint",
     "titleLang": {
       "en": "CPT ChargePoint",
@@ -42,10 +42,21 @@
     "interval": 5,
     "stations": [],
     "channels": [],
-    "subscriptions": []
+    "subscriptions": [],
+    "visHtmlEnabled": true,
+    "visHtmlObjectId": "0_userdata.0.Vis.ChargePoint.htmlStations",
+    "visHtmlDebounceMs": 800,
+    "carLatStateId": "",
+    "carLonStateId": "",
+    "carSocStateId": "",
+    "carLat": "",
+    "carLon": "",
+    "notifySocBelow": 30,
+    "notifyMaxDistanceM": 500
   },
   "protectedNative": [],
   "encryptedNative": [],
   "objects": [],
-  "instanceObjects": []
+  "instanceObjects": [],
+  "version": "0.7.0"
 }
