@@ -944,8 +944,8 @@ class CptAdapter extends utils.Adapter {
 
         // Only show active stations in VIS (filter out disabled stations marked as 'deaktiviert')
         const prefixes = prefixesAll.filter((p) => {
-            const st = all[this.namespace + '.' + p + '.statusDerived']?.val;
-            return String(st || '').toLowerCase() !== 'deaktiviert';
+            const en = all[this.namespace + '.' + p + '.enabled']?.val;
+            return en === true;
         });
 
         const html = this.renderStationsHtml(prefixes, all);
