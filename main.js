@@ -9,8 +9,10 @@ function parseNumberLocale(v) {
     if (typeof v === 'number') return v;
     const s = String(v).trim();
     if (!s) return NaN;
-    // handle German decimal comma like "9,56280495"
-    const norm = s.replace(/\s+/g, '').replace(',', '.');
+    // handle German decimal comma like "9,56280495" and strip units/symbols like "°"
+    // keep only digits, minus, comma and dot
+    const cleaned = s.replace(/\s+/g, '').replace(/[^0-9,\.-]/g, '');
+    const norm = cleaned.replace(',', '.');
     const n = Number(norm);
     return Number.isFinite(n) ? n : NaN;
 }
@@ -416,8 +418,11 @@ class CptAdapter extends utils.Adapter {
         const lat = this.carLatStateId ? await this.getForeignStateAsync(this.carLatStateId).catch(() => null) : null;
         const lon = this.carLonStateId ? await this.getForeignStateAsync(this.carLonStateId).catch(() => null) : null;
 
-        const latN = lat && lat.val !== undefined ? parseNumberLocale(lat.val) : NaN;
-        const lonN = lon && lon.val !== undefined ? parseNumberLocale(lon.val) : NaN;
+        const latRaw = lat && lat.val !== undefined ? lat.val : undefined;
+        const lonRaw = lon && lon.val !== undefined ? lon.val : undefined;
+        const latN = latRaw !== undefined ? parseNumberLocale(latRaw) : NaN;
+        const lonN = lonRaw !== undefined ? parseNumberLocale(lonRaw) : NaN;
+        this.log.debug(`Auto init: latId='${this.carLatStateId}' val='${latRaw}' parsed=${latN}; lonId='${this.carLonStateId}' val='${lonRaw}' parsed=${lonN}`);
         if (Number.isFinite(latN) && Number.isFinite(lonN)) {
             this.carLat = latN;
             this.carLon = lonN;
@@ -445,7 +450,9 @@ class CptAdapter extends utils.Adapter {
     async initCarSoc() {
         if (!this.carSocStateId) return;
         const st = await this.getForeignStateAsync(this.carSocStateId).catch(() => null);
-        const soc = st && st.val !== undefined ? parseNumberLocale(st.val) : NaN;
+        const raw = st && st.val !== undefined ? st.val : undefined;
+        const soc = raw !== undefined ? parseNumberLocale(raw) : NaN;
+        this.log.debug(`Auto init SoC: socId='${this.carSocStateId}' val='${raw}' parsed=${soc}`);
         if (Number.isFinite(soc)) {
             this.carSoc = soc;
             await this.setStateAsync('car.soc', { val: soc, ack: true });
