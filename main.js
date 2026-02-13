@@ -367,7 +367,40 @@ class CptAdapter extends utils.Adapter {
     async onMessage(obj) {
         if (!obj) return;
 
-        if (obj.command === 'testChannel') {
+        
+
+
+// Provide dropdown options for admin/jsonConfig
+if (obj.command === 'getStations') {
+    try {
+        const list = await this.getStatesAsync(this.namespace + '.stations.*.*.name');
+        const opts = [];
+        for (const [id, st] of Object.entries(list || {})) {
+            const prefix = id.replace(/\.name$/, '').replace(this.namespace + '.', '');
+            const stationName = st?.val ? String(st.val) : prefix.split('.').pop();
+            const parts = prefix.split('.');
+            const city = parts.length >= 2 ? parts[1] : '';
+            opts.push({ value: prefix, label: `${city} / ${stationName}` });
+        }
+        obj.callback && this.sendTo(obj.from, obj.command, { options: opts }, obj.callback);
+    } catch (e) {
+        obj.callback && this.sendTo(obj.from, obj.command, { options: [] }, obj.callback);
+    }
+    return;
+}
+
+if (obj.command === 'getRecipients') {
+    const active = this.getActiveChannels();
+    const labels = new Set();
+    for (const ch of active) {
+        const lbl = ch.label || ch.name || '';
+        if (lbl) labels.add(String(lbl));
+    }
+    const opts = Array.from(labels).sort().map(l => ({ value: l, label: l }));
+    obj.callback && this.sendTo(obj.from, obj.command, { options: opts }, obj.callback);
+    return;
+}
+if (obj.command === 'testChannel') {
             const instance = (obj.message?.instance || '').toString().trim();
             const user = (obj.message?.user || '').toString().trim();
             const label = (obj.message?.label || '').toString().trim();
@@ -540,7 +573,7 @@ return;
             const stationPrefix = `stations.${cityKey}.${stationKey}`;
             this.stationPrefixByName[st.name] = stationPrefix;
             await this.ensureStationObjects(stationPrefix, st);
-            await this.setStateAsync(`${stationPrefix}.freePorts`, { val: 0, ack: true });
+            await this.updateStateIfChanged(`${stationPrefix}.freePorts`, 0);
         }
 
         await this.updateAllStations(stations);
@@ -613,36 +646,6 @@ return;
                 const notifyEnabled = notify?.val === true;
 
                 const wasAvailable = oldStatus === 'available';
-                if (notifyEnabled && !wasAvailable && newStatus === 'available') {
-                    const cityObj = await this.getObjectAsync(`stations.${cityKey}`);
-                    const cityName = cityObj?.common?.name || cityKey;
-
-                    const fp = await this.getStateAsync(`${stationPrefix}.freePorts`);
-                    const pc = await this.getStateAsync(`${stationPrefix}.portCount`);
-
-                    const freePorts = fp?.val !== undefined && fp?.val !== null ? Number(fp.val) : undefined;
-                    const portCount = pc?.val !== undefined && pc?.val !== null ? Number(pc.val) : undefined;
-
-                    await this.sendAvailableNotification({
-                        city: cityName,
-                        station: stationKey,
-                        freePorts,
-                        portCount,
-                        status: newStatus,
-                        isTest: true,
-                    });
-
-                    this.log.info(`Manual notify trigger (TEST): ${stationPrefix} ${oldStatus} -> ${newStatus}`);
-                } else {
-                    this.log.debug(`Manual statusDerived change ignored: ${stationPrefix} ${oldStatus} -> ${newStatus} (notify=${notifyEnabled})`);
-                }
-            } catch (e) {
-                this.log.warn(`Manual statusDerived notify check failed for ${stationPrefix}: ${e.message}`);
-            }
-            return;
-        }
-
-
 
         if (id === `${this.namespace}.tools.export` && state.val === true) {
             await this.doExportStations();
@@ -733,54 +736,47 @@ return;
             await this.ensureCityChannel(`stations.${cityKey}`, city);
             await this.ensureStationObjects(stationPrefix, st);
 
-            const notifyState = await this.getStateAsync(`${stationPrefix}.notifyOnAvailable`);
-            const notifyEnabled = notifyState?.val === true;
-
             if (st.enabled === false) {
-                await this.setStateAsync(`${stationPrefix}.statusDerived`, { val: 'deaktiviert', ack: true });
-                await this.setStateAsync(`${stationPrefix}.portCount`, { val: 0, ack: true });
-                await this.setStateAsync(`${stationPrefix}.freePorts`, { val: 0, ack: true });
+                await this.updateStateIfChanged(`${stationPrefix}.statusDerived`, 'deaktiviert');
+                await this.updateStateIfChanged(`${stationPrefix}.portCount`, 0);
+                await this.updateStateIfChanged(`${stationPrefix}.freePorts`, 0);
                 await this.setStateAsync(`${stationPrefix}.lastUpdate`, { val: new Date().toISOString(), ack: true });
                 continue;
             }
 
-            const ports = this.buildLogicalPorts(data1, data2, !!st.deviceId2);
-            const portCount = st.deviceId2 ? 2 : ports.length;
-            const freePorts = ports.reduce((acc, p) => acc + (this.normalizeStatus(p?.statusV2 || p?.status) === 'available' ? 1 : 0), 0);
-            const derived = this.deriveStationStatusFromPorts(ports);
+            
+const ports = this.buildLogicalPorts(data1, data2, !!st.deviceId2);
+const portCount = st.deviceId2 ? 2 : ports.length;
+const freePorts = ports.reduce((acc, p) => acc + (this.normalizeStatus(p?.statusV2 || p?.status) === 'available' ? 1 : 0), 0);
+const derived = this.deriveStationStatusFromPorts(ports);
 
-            const prevState = await this.getStateAsync(`${stationPrefix}.statusDerived`);
-            const prev = prevState?.val ? String(prevState.val) : undefined;
+// Read previous values BEFORE updating (for change-detection + notify trigger)
+const prevFreeState = await this.getStateAsync(`${stationPrefix}.freePorts`).catch(() => null);
+const prevFreePorts = prevFreeState && prevFreeState.val !== null && prevFreeState.val !== undefined ? Number(prevFreeState.val) : undefined;
 
-            await this.setStateAsync(`${stationPrefix}.portCount`, { val: portCount, ack: true });
-            await this.setStateAsync(`${stationPrefix}.freePorts`, { val: freePorts, ack: true });
-            await this.setStateAsync(`${stationPrefix}.statusDerived`, { val: derived, ack: true });
-            this.lastStatusByStation[stationPrefix] = derived;
+const prevDerivedState = await this.getStateAsync(`${stationPrefix}.statusDerived`).catch(() => null);
+const prevDerived = prevDerivedState && prevDerivedState.val !== null && prevDerivedState.val !== undefined ? String(prevDerivedState.val) : undefined;
 
-            // Notify when station becomes available based on freePorts transition: 0 -> >0
-            const oldFreePorts = this.lastFreePortsByStation[stationPrefix];
-            this.lastFreePortsByStation[stationPrefix] = freePorts;
+await this.updateStateIfChanged(`${stationPrefix}.portCount`, portCount);
+await this.updateStateIfChanged(`${stationPrefix}.freePorts`, freePorts);
+await this.updateStateIfChanged(`${stationPrefix}.statusDerived`, derived);
 
-            try {
-                const notify = await this.getStateAsync(`${stationPrefix}.notifyOnAvailable`);
-                const notifyEnabled = notify?.val === true;
+// lastUpdate always refresh
+await this.setStateAsync(`${stationPrefix}.lastUpdate`, { val: new Date().toISOString(), ack: true });
 
-                const becameFree = oldFreePorts !== undefined && Number(oldFreePorts) === 0 && Number(freePorts) > 0;
-                if (notifyEnabled && becameFree) {
-                    await this.sendAvailableNotification({
-                        city,
-                        station: stationName,
-                        freePorts,
-                        portCount,
-                        status: derived,
-                        isTest: false,
-                    });
-                    this.log.info(`Notify trigger: ${stationName} (${city}) freePorts ${oldFreePorts} -> ${freePorts}`);
-                }
-            } catch (e) {
-                this.log.warn(`Notify check failed for ${stationPrefix}: ${e.message}`);
-            }
-
+// Notify only when station becomes free: freePorts 0 -> >0 (based on stored state)
+const becameFree = prevFreePorts !== undefined && Number(prevFreePorts) === 0 && Number(freePorts) > 0;
+if (becameFree) {
+    await this.notifySubscribers({
+        stationPrefix,
+        city,
+        stationName,
+        freePorts,
+        portCount,
+        isTest: false,
+    });
+    this.log.info(`Notify trigger: ${stationName} (${city}) freePorts ${prevFreePorts} -> ${freePorts}`);
+}
 
             for (let i = 0; i < ports.length; i++) {
                 const port = ports[i] || {};
@@ -807,32 +803,112 @@ return;
                 const plugType = connector0?.plugType ? String(connector0.plugType) : '';
                 const displayPlugType = connector0?.displayPlugType ? String(connector0.displayPlugType) : '';
 
-                await this.setStateAsync(`${portPrefix}.status`, { val: pStatus, ack: true });
-                await this.setStateAsync(`${portPrefix}.statusV2`, { val: pStatusV2, ack: true });
-                await this.setStateAsync(`${portPrefix}.evseId`, { val: evseId, ack: true });
-                if (maxPowerKw !== null) await this.setStateAsync(`${portPrefix}.maxPowerKw`, { val: maxPowerKw, ack: true });
-                await this.setStateAsync(`${portPrefix}.level`, { val: level, ack: true });
-                await this.setStateAsync(`${portPrefix}.displayLevel`, { val: displayLevel, ack: true });
-                await this.setStateAsync(`${portPrefix}.plugType`, { val: plugType, ack: true });
-                await this.setStateAsync(`${portPrefix}.displayPlugType`, { val: displayPlugType, ack: true });
+                await this.updateStateIfChanged(`${portPrefix}.status`, pStatus);
+                await this.updateStateIfChanged(`${portPrefix}.statusV2`, pStatusV2);
+                await this.updateStateIfChanged(`${portPrefix}.evseId`, evseId);
+                if (maxPowerKw !== null) await this.updateStateIfChanged(`${portPrefix}.maxPowerKw`, maxPowerKw);
+                await this.updateStateIfChanged(`${portPrefix}.level`, level);
+                await this.updateStateIfChanged(`${portPrefix}.displayLevel`, displayLevel);
+                await this.updateStateIfChanged(`${portPrefix}.plugType`, plugType);
+                await this.updateStateIfChanged(`${portPrefix}.displayPlugType`, displayPlugType);
                 await this.setStateAsync(`${portPrefix}.lastUpdate`, { val: new Date().toISOString(), ack: true });
             }
 
             await this.setStateAsync(`${stationPrefix}.lastUpdate`, { val: new Date().toISOString(), ack: true });
 
-            if (notifyEnabled && prev !== undefined && prev !== 'available' && derived === 'available') {
-                await this.sendAvailableNotification({
-                    city,
-                    station: st.name,
-                    freePorts,
-                    portCount,
-                    status: derived,
-                });
-            }
-
             this.log.info(`Aktualisiert: ${st.name} → city=${city}, freePorts=${freePorts}, portCount=${portCount}, derived=${derived}`);
         }
     }
+
+
+
+getActiveChannels(ctx = {}) {
+    let channels = this.config.channels || [];
+    // Some admin versions store tables as object map
+    if (channels && !Array.isArray(channels) && typeof channels === 'object') {
+        channels = Object.values(channels);
+    }
+    // Some store as JSON string
+    if (typeof channels === 'string') {
+        try {
+            const parsed = JSON.parse(channels);
+            channels = parsed;
+        } catch (e) {
+            channels = [];
+        }
+    }
+    if (!Array.isArray(channels)) channels = [];
+
+    let active = channels.filter(c => c && isTrue(c.enabled));
+    if (ctx.onlyInstance) {
+        active = active.filter(c => String(c.instance) === String(ctx.onlyInstance));
+    }
+    if (ctx.onlyLabel) {
+        active = active.filter(c => String(c.label || c.name || '').toLowerCase() === String(ctx.onlyLabel).toLowerCase());
+    }
+    return active;
+}
+
+async updateStateIfChanged(id, val, ack = true) {
+    const cur = await this.getStateAsync(id).catch(() => null);
+    const curVal = cur ? cur.val : undefined;
+    if (cur === null || cur === undefined || curVal !== val) {
+        await this.setStateAsync(id, { val, ack });
+        return true;
+    }
+    return false;
+}
+
+getStationsList() {
+    const stations = Array.isArray(this.config.stations) ? this.config.stations : [];
+    const out = [];
+    for (const st of stations) {
+        if (!st) continue;
+        const cityKey = this.safeCityKey(st._lastCity || st.city || 'unknown');
+        const stationKey = this.getStationKey(st);
+        const prefix = `stations.${cityKey}.${stationKey}`;
+        const label = `${st._lastCity || st.city || cityKey} / ${st.name || stationKey}`;
+        out.push({ value: prefix, label });
+    }
+    return out;
+}
+
+getRecipientsList() {
+    const active = this.getActiveChannels();
+    const labels = new Set();
+    for (const ch of active) {
+        const lbl = ch.label || ch.name || '';
+        if (lbl) labels.add(String(lbl));
+    }
+    return Array.from(labels).sort().map(l => ({ value: l, label: l }));
+}
+
+async notifySubscribers({ stationPrefix, city, stationName, freePorts, portCount, isTest = false }) {
+    const subsRaw = this.config.subscriptions || [];
+    let subs = subsRaw;
+    if (subs && !Array.isArray(subs) && typeof subs === 'object') subs = Object.values(subs);
+    if (typeof subs === 'string') {
+        try { subs = JSON.parse(subs); } catch (e) { subs = []; }
+    }
+    if (!Array.isArray(subs)) subs = [];
+
+    const matchSubs = subs.filter(s => s && isTrue(s.enabled) && String(s.station) === String(stationPrefix));
+    const text = `Ladestation ${stationName} ist nun frei`;
+
+    if (matchSubs.length === 0) {
+        if (isTest) {
+            // Fallback: send to all active channels on test
+            await this.sendMessageToChannels(text, {});
+        }
+        return;
+    }
+
+    for (const sub of matchSubs) {
+        const recipient = sub.recipient || sub.user || sub.label || '';
+        if (!recipient) continue;
+        await this.sendMessageToChannels(text, { onlyLabel: recipient });
+    }
+}
 
     onUnload(callback) {
         try {

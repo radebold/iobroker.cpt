@@ -5,8 +5,8 @@
     "main": {
       "type": "panel",
       "label": {
-        "en": "Stations",
-        "de": "Stationen"
+        "de": "Stationen",
+        "en": "Stations"
       },
       "items": {
         "interval": {
@@ -95,84 +95,135 @@
     "communication": {
       "type": "panel",
       "label": {
-        "en": "Communication",
-        "de": "Kommunikation"
+        "de": "Kommunikation",
+        "en": "Communication"
       },
       "items": {
-        "_hint": {
-          "type": "staticText",
-          "text": {
-            "en": "Pick an enabled instance. Tip: type 'telegram', 'whatsapp-cmb' or 'pushover' in the dropdown to filter quickly. Other instances will be ignored by the adapter.",
-            "de": "Wähle eine aktivierte Instanz. Tipp: im Dropdown einfach 'telegram', 'whatsapp-cmb' oder 'pushover' tippen, dann filtert die Liste sofort. Andere Instanzen werden vom Adapter ignoriert."
-          }
-        },
         "channels": {
           "type": "table",
           "label": {
-            "en": "Channels",
-            "de": "Kanäle"
+            "de": "Kanäle",
+            "en": "Channels"
           },
           "items": [
             {
               "type": "checkbox",
               "attr": "enabled",
               "title": {
-                "en": "Enabled",
-                "de": "Aktiv"
+                "de": "Aktiv",
+                "en": "Enabled"
               },
-              "width": 70,
-              "default": true
+              "default": true,
+              "width": 80
             },
             {
-              "type": "instance",
+              "type": "select",
               "attr": "instance",
               "title": {
-                "en": "Adapter instance",
-                "de": "Adapter-Instanz"
+                "de": "Instanz",
+                "en": "Instance"
               },
-              "width": 220,
-              "onlyEnabled": true,
-              "long": false
+              "options": [
+                {
+                  "label": "telegram.0",
+                  "value": "telegram.0"
+                },
+                {
+                  "label": "whatsapp-cmb.0",
+                  "value": "whatsapp-cmb.0"
+                },
+                {
+                  "label": "pushover.0",
+                  "value": "pushover.0"
+                }
+              ],
+              "width": 160
             },
             {
               "type": "text",
               "attr": "user",
               "title": {
-                "en": "Recipient",
-                "de": "Empfänger"
+                "de": "Empfänger",
+                "en": "Recipient"
               },
-              "width": 170,
-              "placeholder": "+4917... / Thomas",
-              "disabled": "data.instance && data.instance.startsWith('pushover.')",
-              "hidden": false
+              "width": 180
             },
             {
               "type": "text",
               "attr": "label",
               "title": {
-                "en": "Label",
-                "de": "Name"
+                "de": "Name",
+                "en": "Name"
               },
-              "width": 200,
-              "placeholder": "Privat / Familie"
+              "width": 140
             },
             {
               "type": "sendTo",
-              "attr": "_test",
-              "title": {
-                "en": "Test",
-                "de": "Test"
-              },
-              "width": 90,
-              "variant": "contained",
-              "icon": "send",
               "command": "testChannel",
-              "jsonData": "{\"instance\":\"${data.instance}\",\"user\":\"${data.user}\",\"label\":\"${data.label}\"}"
+              "icon": "send",
+              "variant": "outlined",
+              "width": 80,
+              "tooltip": {
+                "de": "Test senden",
+                "en": "Send test"
+              },
+              "data": {
+                "instance": "${data.instance}",
+                "user": "${data.user}",
+                "label": "${data.label}"
+              }
             }
-          ],
-          "addRow": true,
-          "deleteRow": true,
-          "compact": true
+          ]
+        }
+      }
+    },
+    "subscriptions": {
+      "type": "panel",
+      "label": {
+        "de": "Abos",
+        "en": "Subscriptions"
+      },
+      "items": {
+        "subscriptions": {
+          "type": "table",
+          "label": {
+            "de": "Benachrichtigungs-Abos",
+            "en": "Notification subscriptions"
+          },
+          "items": [
+            {
+              "type": "checkbox",
+              "attr": "enabled",
+              "title": {
+                "de": "Aktiv",
+                "en": "Enabled"
+              },
+              "default": true,
+              "width": 80
+            },
+            {
+              "type": "selectSendTo",
+              "attr": "station",
+              "title": {
+                "de": "Station",
+                "en": "Station"
+              },
+              "command": "getStations",
+              "manual": false,
+              "width": 260
+            },
+            {
+              "type": "selectSendTo",
+              "attr": "recipient",
+              "title": {
+                "de": "Empfänger",
+                "en": "Recipient"
+              },
+              "command": "getRecipients",
+              "manual": false,
+              "width": 200
+            }
+          ]
         }
       }
     }

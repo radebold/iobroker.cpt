@@ -1,7 +1,7 @@
 {
   "common": {
     "name": "cpt",
-    "version": "0.4.0-beta.2",
+    "version": "0.4.0-beta.3",
     "title": "CPT ChargePoint",
     "titleLang": {
       "en": "CPT ChargePoint",
@@ -41,7 +41,8 @@
   "native": {
     "interval": 5,
     "stations": [],
-    "channels": []
+    "channels": [],
+    "subscriptions": []
   },
   "protectedNative": [],
   "encryptedNative": [],
