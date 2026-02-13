@@ -576,23 +576,147 @@ return;
         }, intervalMin * 60 * 1000);
     }
 
-    async onStateChange(id, state) {
-        if (!state || state.ack) return;
-        // HANDLE_TESTNOTIFY: trigger test notifications via button-states
-        if (id === this.namespace + '.tools.testNotifyAll' && state.val === true) {
-            try {
-                const notifStates = await this.getStatesAsync(this.namespace + '.stations.*.*.notifyOnAvailable');
-                const prefixes = Object.keys(notifStates || {})
-                    .filter(k => notifStates[k] && notifStates[k].val === true)
-                    .map(k => k.replace(/\.notifyOnAvailable$/, ''))
-                    .sort();
+    async updateAllStations() {
+    const stations = Array.isArray(this.config.stations) ? this.config.stations : [];
+    for (const stCfg of stations) {
+        // normalize enabled values coming from admin (can be boolean or "true"/"false")
+        const enabled = stCfg && (stCfg.enabled === true || stCfg.enabled === 'true');
+        if (!enabled) continue;
 
-                if (!prefixes.length) {
-                    this.log.warn('TEST Notify ALL: Keine Stationen mit notifyOnAvailable=true gefunden');
-                } else {
-                    for (const stationPrefix of prefixes) {
-                        await this.sendTestNotifyForPrefix(stationPrefix);
-                    }
+        const stationName = stCfg.name;
+        const deviceId1 = stCfg.deviceId1;
+        const deviceId2 = stCfg.deviceId2;
+
+        // fetch one or two deviceIds and merge ports
+        const data1 = deviceId1 ? await this.safeFetch(deviceId1) : null;
+        const data2 = deviceId2 ? await this.safeFetch(deviceId2) : null;
+        const base = data1 || data2;
+        if (!base) {
+            this.log.warn(`Keine Daten für Station "${stationName}" (deviceId1=${deviceId1}, deviceId2=${deviceId2})`);
+            continue;
+        }
+
+        const city = (base.address && (base.address.city || base.address.cityName)) ? String(base.address.city || base.address.cityName) : 'unknown';
+        const cityId = this.normalizeId(city);
+        const stationId = this.normalizeId(stationName);
+        const prefix = `stations.${cityId}.${stationId}`;
+
+        await this.ensureStationObjects(prefix, stationName);
+
+        // gather ports
+        const ports = [];
+        if (Array.isArray(base.ports)) ports.push(...base.ports);
+        if (data1 && data2) {
+            // avoid duplicates if the API returns the same ports for both ids
+            const p2 = Array.isArray(data2.ports) ? data2.ports : [];
+            for (const p of p2) {
+                const outlet = p && p.outletNumber != null ? Number(p.outletNumber) : null;
+                if (outlet == null || !ports.some(x => Number(x.outletNumber) === outlet)) ports.push(p);
+            }
+        }
+
+        // write port objects
+        let freePorts = 0;
+        let derived = 'unknown';
+        const portStatuses = [];
+
+        for (const p of ports) {
+            const outlet = p && p.outletNumber != null ? Number(p.outletNumber) : null;
+            if (outlet == null) continue;
+
+            const pfx = `${prefix}.ports.${outlet}`;
+            await this.ensurePortObjects(pfx, outlet);
+
+            const status = (p.status != null ? String(p.status) : '');
+            const statusV2 = (p.statusV2 != null ? String(p.statusV2) : '');
+
+            await this.setStateAsync(`${pfx}.status`, { val: status, ack: true });
+            await this.setStateAsync(`${pfx}.statusV2`, { val: statusV2, ack: true });
+            await this.setStateAsync(`${pfx}.displayLevel`, { val: p.displayLevel ?? '', ack: true });
+            await this.setStateAsync(`${pfx}.level`, { val: p.level ?? '', ack: true });
+            await this.setStateAsync(`${pfx}.evseId`, { val: p.evseId ?? '', ack: true });
+
+            // connectorList (first connector)
+            const c0 = Array.isArray(p.connectorList) ? p.connectorList[0] : null;
+            await this.setStateAsync(`${pfx}.plugType`, { val: c0 && c0.plugType ? String(c0.plugType) : '', ack: true });
+            await this.setStateAsync(`${pfx}.displayPlugType`, { val: c0 && c0.displayPlugType ? String(c0.displayPlugType) : '', ack: true });
+
+            // maxPowerKw
+            const maxKw = p.powerRange && p.powerRange.max != null ? Number(p.powerRange.max) : null;
+            if (maxKw != null && !Number.isNaN(maxKw)) {
+                await this.setStateAsync(`${pfx}.maxPowerKw`, { val: maxKw, ack: true });
+            } else {
+                await this.setStateAsync(`${pfx}.maxPowerKw`, { val: 0, ack: true });
+            }
+
+            const isFree = status === 'available';
+            if (isFree) freePorts += 1;
+            portStatuses.push(status);
+        }
+
+        const portCount = ports.length || 0;
+        derived = portCount > 0 ? (portStatuses.some(s => s === 'available') ? 'available' : 'in_use') : 'unknown';
+
+        // previous derived before update
+        const prev = await this.getStateAsync(`${prefix}.statusDerived`);
+        const prevVal = prev && prev.val != null ? String(prev.val) : '';
+
+        await this.setStateAsync(`${prefix}.city`, { val: city, ack: true });
+        await this.setStateAsync(`${prefix}.deviceId`, { val: String(deviceId1 ?? ''), ack: true });
+        await this.setStateAsync(`${prefix}.portCount`, { val: portCount, ack: true });
+        await this.setStateAsync(`${prefix}.freePorts`, { val: freePorts, ack: true });
+        await this.setStateAsync(`${prefix}.statusDerived`, { val: derived, ack: true });
+        await this.setStateAsync(`${prefix}.lastUpdate`, { val: Date.now(), ack: true });
+
+        this.log.info(`Aktualisiert: ${stationName} → city=${city}, freePorts=${freePorts}, portCount=${portCount}, derived=${derived}`);
+
+        // notify on transition to available
+        const subscriptions = this.getSubscriptionsForStation(stationName);
+        const wantsNotifyFlag = (stCfg.notifyOnAvailable === true || stCfg.notifyOnAvailable === 'true');
+        if (prevVal !== 'available' && derived === 'available') {
+            if ((subscriptions && subscriptions.length) || wantsNotifyFlag) {
+                await this.sendAvailableNotification(stationName, city, subscriptions);
+            } else {
+                this.log.debug(`Notify übersprungen für ${stationName}: keine Abos und notifyOnAvailable=false`);
+            }
+        }
+    }
+}
+
+async onStateChange(id, state) {
+    if (!id || !state) return;
+
+    // Station test button -> send test notify for this station
+    if (id.endsWith('.testNotify') && !state.ack && state.val) {
+        const prefix = id.replace(/\.testNotify$/, '');
+        const name = prefix.split('.').slice(-1)[0];
+        this.log.info(`UI TEST Station Button: ${name}`);
+        try {
+            await this.sendTestNotifyForPrefix(prefix);
+        } catch (e) {
+            this.log.warn(`TEST Notify fehlgeschlagen für ${prefix}: ${e && e.message ? e.message : e}`);
+        }
+        // reset button
+        await this.setStateAsync(id, { val: false, ack: true });
+        return;
+    }
+
+    // Manual statusDerived simulation from scripts (ack=false)
+    if (id.endsWith('.statusDerived') && !state.ack) {
+        const prefix = id.replace(/\.statusDerived$/, '');
+        const val = String(state.val ?? '');
+        this.log.debug(`Manual statusDerived change: ${prefix} -> ${val} (ack=false)`);
+        if (val === 'available') {
+            try {
+                await this.sendTestNotifyForPrefix(prefix);
+            } catch (e) {
+                this.log.warn(`Manual statusDerived notify failed for ${prefix}: ${e && e.message ? e.message : e}`);
+            }
+        }
+        await this.setStateAsync(id, { val: state.val, ack: true });
+        return;
+    }
+}
                     this.log.info(`TEST Notify ALL: ${prefixes.length} Station(en) ausgelöst`);
                 }
             } catch (e) {
