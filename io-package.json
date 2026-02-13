@@ -1,7 +1,7 @@
 {
   "common": {
     "name": "cpt",
-    "version": "0.4.0-beta.1",
+    "version": "0.4.0-beta.2",
     "title": "CPT ChargePoint",
     "titleLang": {
       "en": "CPT ChargePoint",
@@ -41,12 +41,10 @@
   "native": {
     "interval": 5,
     "stations": [],
-    "channels": [],
-    "subscriptions": []
+    "channels": []
   },
   "protectedNative": [],
   "encryptedNative": [],
   "objects": [],
-  "instanceObjects": [],
-  "version": "0.4.0-beta.2"
+  "instanceObjects": []
 }

@@ -175,64 +175,6 @@
           "compact": true
         }
       }
-    },
-    "subscriptions": {
-      "type": "panel",
-      "label": {
-        "en": "Subscriptions",
-        "de": "Abos"
-      },
-      "items": {
-        "_hint": {
-          "type": "staticText",
-          "text": {
-            "en": "Configure who should be notified when a station becomes available. 'Station' must match the Station name from the Stations tab. 'Recipient' must match the Label from Communication tab.",
-            "de": "Lege fest, wer benachrichtigt werden soll, wenn eine Station frei wird. 'Station' muss exakt dem Namen aus dem Reiter Stationen entsprechen. 'Empfänger' muss dem Namen/Label aus dem Reiter Kommunikation entsprechen."
-          }
-        },
-        "subscriptions": {
-          "type": "table",
-          "label": {
-            "en": "Subscriptions",
-            "de": "Abos"
-          },
-          "items": [
-            {
-              "type": "checkbox",
-              "attr": "enabled",
-              "title": {
-                "en": "Enabled",
-                "de": "Aktiv"
-              },
-              "width": 70,
-              "default": true
-            },
-            {
-              "type": "text",
-              "attr": "station",
-              "title": {
-                "en": "Station",
-                "de": "Station"
-              },
-              "width": 220,
-              "placeholder": "Eichenweg"
-            },
-            {
-              "type": "text",
-              "attr": "recipient",
-              "title": {
-                "en": "Recipient (Label)",
-                "de": "Empfänger (Name)"
-              },
-              "width": 220,
-              "placeholder": "Thomas"
-            }
-          ],
-          "addRow": true,
-          "deleteRow": true,
-          "compact": true
-        }
-      }
     }
   }
 }

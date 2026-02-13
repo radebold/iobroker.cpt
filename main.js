@@ -50,19 +50,6 @@ class CptAdapter extends utils.Adapter {
         return (c1 || c2 || 'Unbekannt').toString().trim() || 'Unbekannt';
     }
 
-    async safeFetch(deviceId) {
-        if (!deviceId) return null;
-        const url = `https://mc.chargepoint.com/map-prod/v3/station/info?deviceId=${deviceId}`;
-        try {
-            this.log.debug(`GET ${url}`);
-            const res = await axios.get(url, { timeout: 12000 });
-            return res.data;
-        } catch (err) {
-            this.log.warn(`Fetch fehlgeschlagen (${deviceId}): ${err.message}`);
-            return null;
-        }
-    }
-
     getStationKey(station) {
         const base = station.name ? station.name : `station_${station.deviceId1}`;
         return this.makeSafeName(base) || `station_${station.deviceId1}`;
@@ -255,140 +242,127 @@ class CptAdapter extends utils.Adapter {
     getChannels() {
         const channels = Array.isArray(this.config.channels) ? this.config.channels : [];
         return channels
-            .filter((c) => c && c.instance)
+            .filter((c) => c && c.enabled !== false && c.instance)
             .map((c) => ({
-                enabled: this.normalizeBool(c.enabled),
                 instance: String(c.instance).trim(),
                 user: c.user !== undefined && c.user !== null ? String(c.user).trim() : '',
                 label: c.label !== undefined && c.label !== null ? String(c.label).trim() : '',
             }))
-            .filter((c) => c.enabled && c.instance)
             .filter((c) => {
                 const ok = c.instance.startsWith('telegram.') || c.instance.startsWith('whatsapp-cmb.') || c.instance.startsWith('pushover.');
                 if (!ok) this.log.warn(`Kommunikations-Instanz wird ignoriert (nicht erlaubt): ${c.instance}`);
                 return ok;
             });
     }
-getSubscriptions() {
-    const raw = Array.isArray(this.config?.subscriptions) ? this.config.subscriptions : [];
-    return raw
-        .map((s) => ({
-            enabled: this.normalizeBool(s.enabled),
-            station: String(s.station || '').trim(),
-            recipient: String(s.recipient || '').trim(),
-            note: String(s.note || '').trim(),
-        }))
-        .filter((s) => s.enabled && s.station && s.recipient);
-}
-
-getSubscriptionsForStation(stationName) {
-    const name = String(stationName || '').trim().toLowerCase();
-    if (!name) return [];
-    return this.getSubscriptions()
-        .filter((s) => s.station.toLowerCase() === name || s.station === '*' )
-        .map((s) => s.recipient);
-}
-
-getStationNameFromPrefix(stationPrefix) {
-    const entries = Object.entries(this.stationPrefixByName || {});
-    for (const [name, prefix] of entries) {
-        if (prefix === stationPrefix) return name;
-    }
-    return null;
-}
 
 
-
-    async sendMessageToChannels(text, options = {}) {
-    const { recipients = null, isTest = false } = options;
-
-    const channels = this.getChannels();
-    const activeChannels = channels.filter((c) => c.enabled && c.instance);
-
-    if (activeChannels.length === 0) {
-        this.log.debug('Keine Kommunikationskanäle konfiguriert – Versand übersprungen');
-        return;
-    }
-
-    // If recipients is provided: filter by label (recipient name)
-    const targets = Array.isArray(recipients) && recipients.length
-        ? activeChannels.filter((c) => recipients.includes(String(c.label || '').trim()))
-        : activeChannels;
-
-    if (targets.length === 0) {
-        this.log.debug('Keine passenden Kommunikationskanäle für Empfänger-Auswahl gefunden – Versand übersprungen');
-        return;
-    }
-
-    for (const ch of targets) {
-        const inst = String(ch.instance || '').trim();
-        const adapter = inst.split('.')[0];
-
+    async sendMessageToChannels(text, ctx = {}) {
+        let channels = [];
         try {
-            if (adapter === 'telegram') {
-                // user can be alias or empty. If empty -> telegram adapter sends to default receiver (if configured)
-                const payload = { text };
-                if (ch.user) payload.user = ch.user;
-                await this.sendToAsync(inst, 'send', payload);
-            } else if (adapter === 'whatsapp-cmb' || adapter === 'open-wa') {
-                // phone number in ch.user
-                const payload = { text };
-                if (ch.user) payload.phone = ch.user;
-                await this.sendToAsync(inst, 'send', payload);
-            } else if (adapter === 'pushover') {
-                // pushover adapter typically ignores "user" here and uses its own config
-                const payload = { message: text, sound: '' };
-                await this.sendToAsync(inst, 'send', payload);
+            channels = (typeof this.getChannels === 'function' ? this.getChannels() : []) || [];
+        } catch (e) {
+            this.log.warn(`getChannels() failed: ${e.message}`);
+            channels = [];
+        }
+        if (channels.length === 0) {
+            this.log.debug('Keine Kommunikationskanäle konfiguriert – Versand übersprungen');
+            return { ok: 0, failed: 0, note: 'no_channels' };
+        }
+
+        let ok = 0;
+        let failed = 0;
+
+        for (const ch of activeChannels) {
+            const inst = ch.instance;
+            const u = ch.user;
+            const lbl = ch.label;
+            const isTelegram = inst.startsWith('telegram.');
+            const isWhatsAppCmb = inst.startsWith('whatsapp-cmb.');
+            const isPushover = inst.startsWith('pushover.');
+
+            let payload;
+            if (isTelegram) {
+                payload = { text, ...(u ? { user: u } : {}) };
+            } else if (isWhatsAppCmb) {
+                payload = {
+                    phone: u || undefined,
+                    number: u || undefined,
+                    to: u || undefined,
+                    text,
+                    message: text,
+                    title: 'ChargePoint',
+                    channelLabel: lbl || undefined,
+                };
+            } else if (isPushover) {
+                payload = { message: text, sound: '' };
             } else {
-                // Fallback: generic send
-                await this.sendToAsync(inst, 'send', { text, user: ch.user || undefined });
+                payload = { text };
             }
 
-            this.log.info(`Notify ${isTest ? 'TEST ' : ''}gesendet via ${inst}${ch.label ? ` → ${ch.label}` : ''}`);
+            if (!payload.city && ctx && ctx.city) payload.city = ctx.city;
+            if (!payload.station && ctx && ctx.station) payload.station = ctx.station;
+            if (payload.freePorts === undefined && ctx && ctx.freePorts !== undefined) payload.freePorts = ctx.freePorts;
+            if (payload.portCount === undefined && ctx && ctx.portCount !== undefined) payload.portCount = ctx.portCount;
+            if (!payload.status && ctx && ctx.status) payload.status = ctx.status;
+
+            Object.keys(payload).forEach((k) => payload[k] === undefined && delete payload[k]);
+
+
+
+            try {
+                if (!payload.city && ctx && ctx.city) payload.city = ctx.city;
+                if (!payload.station && ctx && ctx.station) payload.station = ctx.station;
+                if (payload.freePorts === undefined && ctx && ctx.freePorts !== undefined) payload.freePorts = ctx.freePorts;
+                if (payload.portCount === undefined && ctx && ctx.portCount !== undefined) payload.portCount = ctx.portCount;
+                if (!payload.status && ctx && ctx.status) payload.status = ctx.status;
+                this.sendTo(ch.instance, 'send', payload);
+                ok++;
+                this.log.info(`Message gesendet über ${ch.instance} (${ch.label || 'Channel'})`);
+            } catch (e) {
+                failed++;
+                this.log.warn(`sendTo fehlgeschlagen (${ch.instance}): ${e.message}`);
+            }
+        }
+
+        return { ok, failed, note: 'sent' };
+    }
+
+    async sendAvailableNotification(ctx) {
+        const prefix = ctx.isTest ? 'TEST: ' : '';
+        const text = `${prefix}Ladestation ${ctx.station} in ${ctx.city} ist nun frei${ctx.freePorts !== undefined && ctx.portCount !== undefined ? ` (${ctx.freePorts}/${ctx.portCount})` : ''}`;
+        return this.sendMessageToChannels(text, ctx);
+    }
+
+
+    async sendTestNotifyForPrefix(stationPrefix) {
+        // stationPrefix is like "stations.city.station"
+        try {
+            const cityKey = stationPrefix.split('.')[1] || 'unbekannt';
+            const stationKey = stationPrefix.split('.')[2] || 'station';
+            // Try to get friendly names from states (fallback to keys)
+            const nameState = await this.getStateAsync(`${stationPrefix}.name`).catch(() => null);
+            const cityState = await this.getStateAsync(`${stationPrefix}.city`).catch(() => null);
+            const freePortsState = await this.getStateAsync(`${stationPrefix}.freePorts`).catch(() => null);
+            const portCountState = await this.getStateAsync(`${stationPrefix}.portCount`).catch(() => null);
+
+            const stationName = (nameState && nameState.val) ? String(nameState.val) : stationKey;
+            const cityName = (cityState && cityState.val) ? String(cityState.val) : cityKey;
+            const freePorts = (freePortsState && freePortsState.val !== undefined) ? Number(freePortsState.val) : undefined;
+            const portCount = (portCountState && portCountState.val !== undefined) ? Number(portCountState.val) : undefined;
+
+            await this.sendAvailableNotification({
+                isTest: true,
+                station: stationName,
+                city: cityName,
+                freePorts,
+                portCount,
+            });
+
+            this.log.info(`TEST Notify gesendet: ${stationName} (${cityName})`);
         } catch (e) {
-            this.log.warn(`Notify fehlgeschlagen via ${inst}${ch.label ? ` (${ch.label})` : ''}: ${e.message}`);
+            this.log.warn(`TEST Notify fehlgeschlagen für ${stationPrefix}: ${e.message}`);
         }
     }
-}
-
-async sendAvailableNotification({ city, station, freePorts, portCount, status, isTest = false, recipients = null }) {
-    const stationText = station ? String(station) : 'Unbekannte Station';
-    const cityText = city ? String(city) : '';
-    const location = cityText ? `${cityText} – ${stationText}` : stationText;
-
-    // Standard-Text
-    const text = `Ladestation ${location} ist nun frei (${freePorts}/${portCount})`;
-
-    await this.sendMessageToChannels(text, { recipients, isTest });
-}
-
-async sendTestNotifyForPrefix(stationPrefix) {
-    try {
-        const stationName = this.getStationNameFromPrefix(stationPrefix) || stationPrefix.split('.').slice(-1)[0];
-        const cityKey = stationPrefix.split('.')[1] || '';
-        const city = await this.getStateAsync(`${stationPrefix}.city`).then(s => s?.val).catch(() => null);
-
-        const freePorts = await this.getStateAsync(`${stationPrefix}.freePorts`).then(s => s?.val).catch(() => 1);
-        const portCount = await this.getStateAsync(`${stationPrefix}.portCount`).then(s => s?.val).catch(() => 1);
-        const recipients = this.getSubscriptionsForStation(stationName);
-
-        await this.sendAvailableNotification({
-            city: city || cityKey,
-            station: stationName,
-            freePorts: Number(freePorts) || 1,
-            portCount: Number(portCount) || 1,
-            status: 'available',
-            isTest: true,
-            recipients: recipients.length ? recipients : null, // if no subscriptions -> send to all channels
-        });
-
-        this.log.info(`TEST Notify ausgelöst: ${stationName} (${city || cityKey || 'n/a'})`);
-    } catch (e) {
-        this.log.warn(`TEST Notify fehlgeschlagen für ${stationPrefix}: ${e.message}`);
-    }
-}
-
-
 
     async onMessage(obj) {
         if (!obj) return;
@@ -576,148 +550,24 @@ return;
         }, intervalMin * 60 * 1000);
     }
 
-    async updateAllStations() {
-    const stations = Array.isArray(this.config.stations) ? this.config.stations : [];
-    for (const stCfg of stations) {
-        // normalize enabled values coming from admin (can be boolean or "true"/"false")
-        const enabled = stCfg && (stCfg.enabled === true || stCfg.enabled === 'true');
-        if (!enabled) continue;
-
-        const stationName = stCfg.name;
-        const deviceId1 = stCfg.deviceId1;
-        const deviceId2 = stCfg.deviceId2;
-
-        // fetch one or two deviceIds and merge ports
-        const data1 = deviceId1 ? await this.safeFetch(deviceId1) : null;
-        const data2 = deviceId2 ? await this.safeFetch(deviceId2) : null;
-        const base = data1 || data2;
-        if (!base) {
-            this.log.warn(`Keine Daten für Station "${stationName}" (deviceId1=${deviceId1}, deviceId2=${deviceId2})`);
-            continue;
-        }
-
-        const city = (base.address && (base.address.city || base.address.cityName)) ? String(base.address.city || base.address.cityName) : 'unknown';
-        const cityId = this.normalizeId(city);
-        const stationId = this.normalizeId(stationName);
-        const prefix = `stations.${cityId}.${stationId}`;
-
-        await this.ensureStationObjects(prefix, stationName);
-
-        // gather ports
-        const ports = [];
-        if (Array.isArray(base.ports)) ports.push(...base.ports);
-        if (data1 && data2) {
-            // avoid duplicates if the API returns the same ports for both ids
-            const p2 = Array.isArray(data2.ports) ? data2.ports : [];
-            for (const p of p2) {
-                const outlet = p && p.outletNumber != null ? Number(p.outletNumber) : null;
-                if (outlet == null || !ports.some(x => Number(x.outletNumber) === outlet)) ports.push(p);
-            }
-        }
-
-        // write port objects
-        let freePorts = 0;
-        let derived = 'unknown';
-        const portStatuses = [];
-
-        for (const p of ports) {
-            const outlet = p && p.outletNumber != null ? Number(p.outletNumber) : null;
-            if (outlet == null) continue;
-
-            const pfx = `${prefix}.ports.${outlet}`;
-            await this.ensurePortObjects(pfx, outlet);
-
-            const status = (p.status != null ? String(p.status) : '');
-            const statusV2 = (p.statusV2 != null ? String(p.statusV2) : '');
-
-            await this.setStateAsync(`${pfx}.status`, { val: status, ack: true });
-            await this.setStateAsync(`${pfx}.statusV2`, { val: statusV2, ack: true });
-            await this.setStateAsync(`${pfx}.displayLevel`, { val: p.displayLevel ?? '', ack: true });
-            await this.setStateAsync(`${pfx}.level`, { val: p.level ?? '', ack: true });
-            await this.setStateAsync(`${pfx}.evseId`, { val: p.evseId ?? '', ack: true });
-
-            // connectorList (first connector)
-            const c0 = Array.isArray(p.connectorList) ? p.connectorList[0] : null;
-            await this.setStateAsync(`${pfx}.plugType`, { val: c0 && c0.plugType ? String(c0.plugType) : '', ack: true });
-            await this.setStateAsync(`${pfx}.displayPlugType`, { val: c0 && c0.displayPlugType ? String(c0.displayPlugType) : '', ack: true });
-
-            // maxPowerKw
-            const maxKw = p.powerRange && p.powerRange.max != null ? Number(p.powerRange.max) : null;
-            if (maxKw != null && !Number.isNaN(maxKw)) {
-                await this.setStateAsync(`${pfx}.maxPowerKw`, { val: maxKw, ack: true });
-            } else {
-                await this.setStateAsync(`${pfx}.maxPowerKw`, { val: 0, ack: true });
-            }
-
-            const isFree = status === 'available';
-            if (isFree) freePorts += 1;
-            portStatuses.push(status);
-        }
-
-        const portCount = ports.length || 0;
-        derived = portCount > 0 ? (portStatuses.some(s => s === 'available') ? 'available' : 'in_use') : 'unknown';
-
-        // previous derived before update
-        const prev = await this.getStateAsync(`${prefix}.statusDerived`);
-        const prevVal = prev && prev.val != null ? String(prev.val) : '';
-
-        await this.setStateAsync(`${prefix}.city`, { val: city, ack: true });
-        await this.setStateAsync(`${prefix}.deviceId`, { val: String(deviceId1 ?? ''), ack: true });
-        await this.setStateAsync(`${prefix}.portCount`, { val: portCount, ack: true });
-        await this.setStateAsync(`${prefix}.freePorts`, { val: freePorts, ack: true });
-        await this.setStateAsync(`${prefix}.statusDerived`, { val: derived, ack: true });
-        await this.setStateAsync(`${prefix}.lastUpdate`, { val: Date.now(), ack: true });
-
-        this.log.info(`Aktualisiert: ${stationName} → city=${city}, freePorts=${freePorts}, portCount=${portCount}, derived=${derived}`);
-
-        // notify on transition to available
-        const subscriptions = this.getSubscriptionsForStation(stationName);
-        const wantsNotifyFlag = (stCfg.notifyOnAvailable === true || stCfg.notifyOnAvailable === 'true');
-        if (prevVal !== 'available' && derived === 'available') {
-            if ((subscriptions && subscriptions.length) || wantsNotifyFlag) {
-                await this.sendAvailableNotification(stationName, city, subscriptions);
-            } else {
-                this.log.debug(`Notify übersprungen für ${stationName}: keine Abos und notifyOnAvailable=false`);
-            }
-        }
-    }
-}
-
-async onStateChange(id, state) {
-    if (!id || !state) return;
-
-    // Station test button -> send test notify for this station
-    if (id.endsWith('.testNotify') && !state.ack && state.val) {
-        const prefix = id.replace(/\.testNotify$/, '');
-        const name = prefix.split('.').slice(-1)[0];
-        this.log.info(`UI TEST Station Button: ${name}`);
-        try {
-            await this.sendTestNotifyForPrefix(prefix);
-        } catch (e) {
-            this.log.warn(`TEST Notify fehlgeschlagen für ${prefix}: ${e && e.message ? e.message : e}`);
-        }
-        // reset button
-        await this.setStateAsync(id, { val: false, ack: true });
-        return;
-    }
-
-    // Manual statusDerived simulation from scripts (ack=false)
-    if (id.endsWith('.statusDerived') && !state.ack) {
-        const prefix = id.replace(/\.statusDerived$/, '');
-        const val = String(state.val ?? '');
-        this.log.debug(`Manual statusDerived change: ${prefix} -> ${val} (ack=false)`);
-        if (val === 'available') {
+    async onStateChange(id, state) {
+        if (!state || state.ack) return;
+        // HANDLE_TESTNOTIFY: trigger test notifications via button-states
+        if (id === this.namespace + '.tools.testNotifyAll' && state.val === true) {
             try {
-                await this.sendTestNotifyForPrefix(prefix);
-            } catch (e) {
-                this.log.warn(`Manual statusDerived notify failed for ${prefix}: ${e && e.message ? e.message : e}`);
-            }
-        }
-        await this.setStateAsync(id, { val: state.val, ack: true });
-        return;
-    }
-}
-                    this.log.info(`TEST Notify ALL: ${prefixes.length} Station(en) ausgelöst`);
+                const notifStates = await this.getStatesAsync(this.namespace + '.stations.*.*.notifyOnAvailable');
+                const prefixes = Object.keys(notifStates || {})
+                    .filter(k => notifStates[k] && notifStates[k].val === true)
+                    .map(k => k.replace(/\.notifyOnAvailable$/, ''))
+                    .sort();
+
+                if (!prefixes.length) {
+                    this.log.warn('TEST Notify ALL: Keine Stationen mit notifyOnAvailable=true gefunden');
+                } else {
+                    for (const stationPrefix of prefixes) {
+                        await this.sendTestNotifyForPrefix(stationPrefix);
+                    }
+                    this.log.info('TEST Notify ALL: ' + prefixes.length + ' Station(en) ausgelöst');
                 }
             } catch (e) {
                 this.log.warn(`TEST Notify ALL fehlgeschlagen: ${e.message}`);
@@ -759,29 +609,180 @@ async onStateChange(id, state) {
             this.lastStatusByStation[stationPrefix] = newStatus;
 
             try {
-    const subs = this.getSubscriptionsForStation(stationName);
-    const hasSubs = subs.length > 0;
+                const notify = await this.getStateAsync(`${stationPrefix}.notifyOnAvailable`);
+                const notifyEnabled = notify?.val === true;
 
-    // Trigger if station was previously fully occupied (freePorts==0) and now has at least one free port
-    const becameFree = oldFreePorts !== undefined && Number(oldFreePorts) === 0 && Number(freePorts) > 0;
+                const wasAvailable = oldStatus === 'available';
+                if (notifyEnabled && !wasAvailable && newStatus === 'available') {
+                    const cityObj = await this.getObjectAsync(`stations.${cityKey}`);
+                    const cityName = cityObj?.common?.name || cityKey;
 
-    if (hasSubs && becameFree) {
-        await this.sendAvailableNotification({
-            city,
-            station: stationName,
-            freePorts,
-            portCount,
-            status: derived,
-            isTest: false,
-            recipients: subs,
-        });
-        this.log.info(`Notify trigger: ${stationName} (${city}) freePorts ${oldFreePorts} -> ${freePorts}`);
+                    const fp = await this.getStateAsync(`${stationPrefix}.freePorts`);
+                    const pc = await this.getStateAsync(`${stationPrefix}.portCount`);
+
+                    const freePorts = fp?.val !== undefined && fp?.val !== null ? Number(fp.val) : undefined;
+                    const portCount = pc?.val !== undefined && pc?.val !== null ? Number(pc.val) : undefined;
+
+                    await this.sendAvailableNotification({
+                        city: cityName,
+                        station: stationKey,
+                        freePorts,
+                        portCount,
+                        status: newStatus,
+                        isTest: true,
+                    });
+
+                    this.log.info(`Manual notify trigger (TEST): ${stationPrefix} ${oldStatus} -> ${newStatus}`);
+                } else {
+                    this.log.debug(`Manual statusDerived change ignored: ${stationPrefix} ${oldStatus} -> ${newStatus} (notify=${notifyEnabled})`);
+                }
+            } catch (e) {
+                this.log.warn(`Manual statusDerived notify check failed for ${stationPrefix}: ${e.message}`);
+            }
+            return;
+        }
+
+
+
+        if (id === `${this.namespace}.tools.export` && state.val === true) {
+            await this.doExportStations();
+            await this.setStateAsync('tools.export', { val: false, ack: true });
+            return;
+        }
+
+        if (id === `${this.namespace}.tools.testNotify` && state.val === true) {
+            const now = new Date().toISOString();
+            const res = await this.sendMessageToChannels('CPT Test: Kommunikation OK ✅');
+            await this.setStateAsync('tools.lastTest', { val: now, ack: true });
+            await this.setStateAsync('tools.lastTestResult', { val: `ok=${res.ok}, failed=${res.failed}`, ack: true });
+            await this.setStateAsync('tools.testNotify', { val: false, ack: true });
+            return;
+        }
     }
-} catch (e) {
-    this.log.warn(`Notify check failed for ${stationPrefix}: ${e.message}`);
-}
 
-for (let i = 0; i < ports.length; i++) {
+    async doExportStations() {
+        const stations = (Array.isArray(this.config.stations) ? this.config.stations : [])
+            .filter((s) => s && typeof s === 'object')
+            .map((s, idx) => ({
+                enabled: s.enabled !== false,
+                notifyOnAvailable: s.notifyOnAvailable === true,
+                name: s.name || `station_${s.deviceId1 ?? s.stationId ?? s.deviceId ?? idx + 1}`,
+                deviceId1: Number(s.deviceId1 ?? s.stationId ?? s.deviceId ?? s.id),
+                deviceId2: s.deviceId2 ? Number(s.deviceId2) : null,
+            }))
+            .filter((s) => !!s.deviceId1);
+
+        const payload = {
+            exportedAt: new Date().toISOString(),
+            adapter: 'cpt',
+            version: this.version,
+            interval: Number(this.config.interval) || 5,
+            channels: Array.isArray(this.config.channels) ? this.config.channels : [],
+            stations,
+        };
+
+        const jsonStr = JSON.stringify(payload, null, 2);
+
+        await this.setStateAsync('tools.exportJson', { val: jsonStr, ack: true });
+
+        const filename = 'stations_export.json';
+        try {
+            await this.writeFileAsync(this.namespace, filename, jsonStr);
+            await this.setStateAsync('tools.exportFile', { val: filename, ack: true });
+        } catch (e) {
+            this.log.warn(`Konnte Export-Datei nicht schreiben: ${e.message}`);
+            await this.setStateAsync('tools.exportFile', { val: '', ack: true });
+        }
+
+        await this.setStateAsync('tools.lastExport', { val: new Date().toISOString(), ack: true });
+        this.log.info(`Export erstellt: ${stations.length} Station(en)`);
+    }
+
+    async safeFetch(deviceId) {
+        try {
+            const url = `https://mc.chargepoint.com/map-prod/v3/station/info?deviceId=${deviceId}`;
+            this.log.debug(`GET ${url}`);
+            const res = await axios.get(url, { timeout: 12000 });
+            return res.data || {};
+        } catch (e) {
+            this.log.warn(`Fetch fehlgeschlagen für deviceId=${deviceId}: ${e.message}`);
+            return null;
+        }
+    }
+
+    buildLogicalPorts(data1, data2, hasSecondId) {
+        if (hasSecondId) {
+            const p1 = (data1?.portsInfo?.ports && data1.portsInfo.ports[0]) ? data1.portsInfo.ports[0] : {};
+            const p2 = (data2?.portsInfo?.ports && data2.portsInfo.ports[0]) ? data2.portsInfo.ports[0] : {};
+            return [{ ...p1, outletNumber: 1 }, { ...p2, outletNumber: 2 }];
+        }
+        const ports = Array.isArray(data1?.portsInfo?.ports) ? data1.portsInfo.ports : [];
+        return ports;
+    }
+
+    async updateAllStations(stations) {
+        for (const st of stations) {
+            const data1 = await this.safeFetch(st.deviceId1);
+            const data2 = st.deviceId2 ? await this.safeFetch(st.deviceId2) : null;
+
+            const city = this.pickCity(data1, data2);
+            const cityKey = this.makeSafeName(city) || 'unbekannt';
+            const stationKey = this.getStationKey(st);
+            const stationPrefix = `stations.${cityKey}.${stationKey}`;
+
+            await this.ensureCityChannel(`stations.${cityKey}`, city);
+            await this.ensureStationObjects(stationPrefix, st);
+
+            const notifyState = await this.getStateAsync(`${stationPrefix}.notifyOnAvailable`);
+            const notifyEnabled = notifyState?.val === true;
+
+            if (st.enabled === false) {
+                await this.setStateAsync(`${stationPrefix}.statusDerived`, { val: 'deaktiviert', ack: true });
+                await this.setStateAsync(`${stationPrefix}.portCount`, { val: 0, ack: true });
+                await this.setStateAsync(`${stationPrefix}.freePorts`, { val: 0, ack: true });
+                await this.setStateAsync(`${stationPrefix}.lastUpdate`, { val: new Date().toISOString(), ack: true });
+                continue;
+            }
+
+            const ports = this.buildLogicalPorts(data1, data2, !!st.deviceId2);
+            const portCount = st.deviceId2 ? 2 : ports.length;
+            const freePorts = ports.reduce((acc, p) => acc + (this.normalizeStatus(p?.statusV2 || p?.status) === 'available' ? 1 : 0), 0);
+            const derived = this.deriveStationStatusFromPorts(ports);
+
+            const prevState = await this.getStateAsync(`${stationPrefix}.statusDerived`);
+            const prev = prevState?.val ? String(prevState.val) : undefined;
+
+            await this.setStateAsync(`${stationPrefix}.portCount`, { val: portCount, ack: true });
+            await this.setStateAsync(`${stationPrefix}.freePorts`, { val: freePorts, ack: true });
+            await this.setStateAsync(`${stationPrefix}.statusDerived`, { val: derived, ack: true });
+            this.lastStatusByStation[stationPrefix] = derived;
+
+            // Notify when station becomes available based on freePorts transition: 0 -> >0
+            const oldFreePorts = this.lastFreePortsByStation[stationPrefix];
+            this.lastFreePortsByStation[stationPrefix] = freePorts;
+
+            try {
+                const notify = await this.getStateAsync(`${stationPrefix}.notifyOnAvailable`);
+                const notifyEnabled = notify?.val === true;
+
+                const becameFree = oldFreePorts !== undefined && Number(oldFreePorts) === 0 && Number(freePorts) > 0;
+                if (notifyEnabled && becameFree) {
+                    await this.sendAvailableNotification({
+                        city,
+                        station: stationName,
+                        freePorts,
+                        portCount,
+                        status: derived,
+                        isTest: false,
+                    });
+                    this.log.info(`Notify trigger: ${stationName} (${city}) freePorts ${oldFreePorts} -> ${freePorts}`);
+                }
+            } catch (e) {
+                this.log.warn(`Notify check failed for ${stationPrefix}: ${e.message}`);
+            }
+
+
+            for (let i = 0; i < ports.length; i++) {
                 const port = ports[i] || {};
                 const outletNumber = port.outletNumber ?? (i + 1);
                 const portPrefix = await this.ensurePortObjects(stationPrefix, outletNumber);
