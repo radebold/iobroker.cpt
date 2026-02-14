@@ -1086,6 +1086,20 @@ class CptAdapter extends utils.Adapter {
 async onReady() {
         this.log.info('Adapter CPT gestartet');
 
+        // Refresh config-derived car settings (do not rely on constructor-time cache)
+        this.carLatStateId = (this.config && this.config.carLatStateId) ? String(this.config.carLatStateId).trim() : '';
+        this.carLonStateId = (this.config && this.config.carLonStateId) ? String(this.config.carLonStateId).trim() : '';
+        this.carSocStateId = (this.config && this.config.carSocStateId) ? String(this.config.carSocStateId).trim() : '';
+
+        this.carLatStatic = (this.config && this.config.carLat !== undefined && this.config.carLat !== null && this.config.carLat !== '') ? Number(this.config.carLat) : null;
+        this.carLonStatic = (this.config && this.config.carLon !== undefined && this.config.carLon !== null && this.config.carLon !== '') ? Number(this.config.carLon) : null;
+
+        this.notifySocBelow = (this.config && this.config.notifySocBelow !== undefined && this.config.notifySocBelow !== null && this.config.notifySocBelow !== '') ? Number(this.config.notifySocBelow) : 30;
+        this.notifyMaxDistanceM = (this.config && this.config.notifyMaxDistanceM !== undefined && this.config.notifyMaxDistanceM !== null && this.config.notifyMaxDistanceM !== '') ? Number(this.config.notifyMaxDistanceM) : 500;
+        this.notifyCooldownMin = (this.config && this.config.notifyCooldownMin !== undefined && this.config.notifyCooldownMin !== null && this.config.notifyCooldownMin !== '') ? Number(this.config.notifyCooldownMin) : 15;
+
+        this.log.debug(`Config (car): latId='${this.carLatStateId}' lonId='${this.carLonStateId}' socId='${this.carSocStateId}' latStatic=${this.carLatStatic} lonStatic=${this.carLonStatic} socBelow=${this.notifySocBelow} maxDistM=${this.notifyMaxDistanceM} cooldownMin=${this.notifyCooldownMin}`);
+
         await this.ensureToolsObjects();
         await this.ensureCarObjects();
 
