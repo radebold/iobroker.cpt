@@ -131,7 +131,7 @@
                 {
                   "label": "whatsapp-cmb.0",
                   "value": "whatsapp-cmb.0"
-                },
+                },{ "label": "open-wa.0", "value": "open-wa.0" },
                 {
                   "label": "pushover.0",
                   "value": "pushover.0"
