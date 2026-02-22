@@ -228,6 +228,7 @@ class CptAdapter extends utils.Adapter {
 
             const isTelegram = inst.startsWith('telegram.');
             const isWhatsAppCmb = inst.startsWith('whatsapp-cmb.');
+            const isOpenWa = inst.startsWith('open-wa.');
             const isPushover = inst.startsWith('pushover.');
 
             let payload;
@@ -243,7 +244,11 @@ class CptAdapter extends utils.Adapter {
                     title: 'ChargePoint',
                     channelLabel: lbl || undefined,
                 };
-            } else if (isPushover) {
+            } else if (isOpenWa) {
+                payload = { to: u || undefined, text };
+            } else if (isOpenWa) {
+                    payload = { to: user || undefined, text: 'CPT Test: Kommunikation OK ✅' };
+                } else if (isPushover) {
                 payload = { message: text, sound: '' };
             } else {
                 payload = { text };
@@ -1310,6 +1315,7 @@ async onReady() {
             try {
                 const isTelegram = instance.startsWith('telegram.');
                 const isWhatsAppCmb = instance.startsWith('whatsapp-cmb.');
+                const isOpenWa = instance.startsWith('open-wa.');
                 const isPushover = instance.startsWith('pushover.');
 
                 let payload;
