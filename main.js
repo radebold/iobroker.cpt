@@ -148,6 +148,18 @@ class CptAdapter extends utils.Adapter {
         return false;
     }
 
+    async updateStatusAgeMin(stationPrefixRel) {
+        try {
+            const st = await this.getStateAsync(`${stationPrefixRel}.statusDerived`).catch(() => null);
+            const lc = st && (st.lc || st.ts);
+            if (!lc) return;
+            const ageMin = Math.max(0, Math.floor((Date.now() - lc) / 60000));
+            await this.updateStateIfChanged(`${stationPrefixRel}.statusAgeMin`, ageMin);
+        } catch {
+            // ignore
+        }
+    }
+
     // ---------- Admin / Config helpers ----------
 
     getActiveChannels(ctx = {}) {
@@ -612,6 +624,7 @@ class CptAdapter extends utils.Adapter {
             ['notifyOnAvailable', { name: 'Benachrichtigen wenn verfügbar', type: 'boolean', role: 'switch', read: true, write: true, def: false }],
             ['testNotify', { name: 'Test: Notify (Button)', type: 'boolean', role: 'button', read: true, write: true, def: false }],
             ['statusDerived', { name: 'Status (aus Ports)', type: 'string', role: 'value', read: true, write: false }],
+            ['statusAgeMin', { name: 'Status seit (Minuten)', type: 'number', role: 'value.interval', unit: 'min', read: true, write: false }],
             ['portCount', { name: 'Anzahl Ports', type: 'number', role: 'value', read: true, write: false }],
             ['freePorts', { name: 'Freie Ports', type: 'number', role: 'value', read: true, write: false }],
             ['lastUpdate', { name: 'Letztes Update', type: 'string', role: 'date', read: true, write: false }],
@@ -738,6 +751,7 @@ class CptAdapter extends utils.Adapter {
 
             if (st.enabled === false) {
                 await this.updateStateIfChanged(`${stationPrefix}.statusDerived`, 'deaktiviert');
+                await this.updateStatusAgeMin(stationPrefix);
                 await this.updateStateIfChanged(`${stationPrefix}.portCount`, 0);
                 await this.updateStateIfChanged(`${stationPrefix}.freePorts`, 0);
                 await this.setStateAsync(`${stationPrefix}.lastUpdate`, { val: new Date().toISOString(), ack: true });
@@ -754,6 +768,7 @@ class CptAdapter extends utils.Adapter {
             await this.updateStateIfChanged(`${stationPrefix}.portCount`, portCount);
             await this.updateStateIfChanged(`${stationPrefix}.freePorts`, freePorts);
             await this.updateStateIfChanged(`${stationPrefix}.statusDerived`, derived);
+            await this.updateStatusAgeMin(stationPrefix);
             await this.setStateAsync(`${stationPrefix}.lastUpdate`, { val: new Date().toISOString(), ack: true });
 
             // ports

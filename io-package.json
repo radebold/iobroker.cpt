@@ -1,7 +1,7 @@
 {
   "common": {
     "name": "cpt",
-    "version": "0.6.6",
+    "version": "0.6.8",
     "title": "CPT ChargePoint",
     "titleLang": {
       "en": "CPT ChargePoint",
@@ -58,5 +58,5 @@
   "encryptedNative": [],
   "objects": [],
   "instanceObjects": [],
-  "version": "0.6.6"
+  "version": "0.6.8"
 }
