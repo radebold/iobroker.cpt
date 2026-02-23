@@ -1,7 +1,7 @@
 {
   "common": {
     "name": "cpt",
-    "version": "0.6.9",
+    "version": "0.6.10",
     "title": "CPT ChargePoint",
     "titleLang": {
       "en": "CPT ChargePoint",
@@ -9,7 +9,7 @@
     },
     "desc": {
       "en": "Adapter for ChargePoint charging stations status",
-      "de": "Adapter für den Status von ChargePoint-Ladestationen"
+      "de": "Adapter f\u00fcr den Status von ChargePoint-Ladestationen"
     },
     "authors": [
       "radebold <radebold@gmail.com>"
@@ -52,7 +52,9 @@
     "carLat": "",
     "carLon": "",
     "notifySocBelow": 30,
-    "notifyMaxDistanceM": 500
+    "notifyMaxDistanceM": 500,
+    "visHtmlMobileObjectId": "0_userdata.0.Vis.ChargePoint.htmlStationsMobile",
+    "visHtmlMobileEnabled": true
   },
   "protectedNative": [],
   "encryptedNative": [],

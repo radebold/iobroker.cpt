@@ -33,6 +33,10 @@ class CptAdapter extends utils.Adapter {
         this.visHtmlEnabled = (this.config && this.config.visHtmlEnabled !== undefined) ? isTrue(this.config.visHtmlEnabled) : true;
         this.visHtmlDebounceMs = Number((this.config && this.config.visHtmlDebounceMs) || 800);
 
+        // Optional: separate (smaller) mobile HTML variant for VIS
+        this.visHtmlMobileObjectId = (this.config && this.config.visHtmlMobileObjectId) || '0_userdata.0.Vis.ChargePoint.htmlStationsMobile';
+        this.visHtmlMobileEnabled = (this.config && this.config.visHtmlMobileEnabled !== undefined) ? isTrue(this.config.visHtmlMobileEnabled) : true;
+
         // transition detection (per stationPrefix)
         this.lastFreePortsByStation = {};
         this.stationPrefixByName = {};
@@ -925,10 +929,15 @@ class CptAdapter extends utils.Adapter {
     
     // ---------- VIS HTML (server side) ----------
     scheduleVisHtmlUpdate(reason = '') {
-        if (!this.visHtmlEnabled) return;
+        if (!this.visHtmlEnabled && !this.visHtmlMobileEnabled) return;
         if (this.visHtmlTimer) clearTimeout(this.visHtmlTimer);
         this.visHtmlTimer = setTimeout(() => {
-            this.writeVisHtmlObject().catch((e) => this.log.warn(`VIS HTML Update fehlgeschlagen: ${e.message}`));
+            if (this.visHtmlEnabled) {
+                this.writeVisHtmlObject().catch((e) => this.log.warn(`VIS HTML Update fehlgeschlagen: ${e.message}`));
+            }
+            if (this.visHtmlMobileEnabled) {
+                this.writeVisHtmlMobileObject().catch((e) => this.log.warn(`VIS HTML Mobile Update fehlgeschlagen: ${e.message}`));
+            }
         }, this.visHtmlDebounceMs);
         if (reason) this.log.debug(`VIS HTML Update geplant: ${reason}`);
     }
@@ -955,6 +964,130 @@ class CptAdapter extends utils.Adapter {
         } catch (e) {
             this.log.warn(`Konnte VIS HTML Objekt nicht anlegen (${id}): ${e.message}`);
         }
+    }
+
+
+    async ensureVisHtmlMobileObject() {
+        if (!this.visHtmlMobileEnabled) return;
+        const id = this.visHtmlMobileObjectId;
+        try {
+            const obj = await this.getForeignObjectAsync(id);
+            if (!obj) {
+                await this.setForeignObjectAsync(id, {
+                    _id: id,
+                    type: 'state',
+                    common: {
+                        name: 'ChargePoint VIS HTML (Mobile)',
+                        type: 'string',
+                        role: 'html',
+                        read: true,
+                        write: true,
+                    },
+                    native: {},
+                });
+            }
+        } catch (e) {
+            this.log.warn(`Konnte VIS HTML Mobile Objekt nicht anlegen (${id}): ${e.message}`);
+        }
+    }
+
+    async writeVisHtmlMobileObject() {
+        if (!this.visHtmlMobileEnabled) return;
+        const id = this.visHtmlMobileObjectId;
+
+        const root = this.namespace + '.stations.';
+        const all = await this.getStatesAsync(root + '*');
+
+        const prefixesAll = Object.keys(all || {})
+            .filter((k) => k.endsWith('.name') && all[k] && all[k].val !== undefined)
+            .map((k) => k.replace(this.namespace + '.', '').replace(/\.name$/, ''))
+            .sort((a, b) => a.localeCompare(b));
+
+        // Only show active stations in VIS (enabled in config)
+        const prefixes = prefixesAll.filter((p) => {
+            const en = all[this.namespace + '.' + p + '.enabled']?.val;
+            return en === true;
+        });
+
+        const html = this.renderStationsHtmlMobile(prefixes, all);
+        await this.ensureVisHtmlMobileObject();
+        await this.setForeignStateAsync(id, { val: html, ack: true });
+    }
+
+    renderStationsHtmlMobile(prefixes, allStates) {
+        const esc = (v) => (v === null || v === undefined) ? '' : String(v)
+            .replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;');
+
+        const badge = (text, kind) => {
+            const styles = {
+                ok:      'background:rgba(46,204,113,.18); border:1px solid rgba(46,204,113,.45);',
+                warn:    'background:rgba(241,196,15,.18); border:1px solid rgba(241,196,15,.45);',
+                bad:     'background:rgba(231,76,60,.18);  border:1px solid rgba(231,76,60,.45);',
+                neutral: 'background:rgba(255,255,255,.10); border:1px solid rgba(255,255,255,.18);',
+            };
+            const st = styles[kind] || styles.neutral;
+            return `<span style="display:inline-flex;align-items:center;gap:6px;padding:6px 10px;border-radius:999px;font-size:13px;font-weight:600;white-space:nowrap;${st}">${esc(text)}</span>`;
+        };
+
+        const kindFromStatus = (s) => {
+            const t = String(s || '').toLowerCase();
+            if (t.includes('available') || t.includes('frei') || t.includes('online') || t.includes('ok')) return 'ok';
+            if (t.includes('charging') || t.includes('in_use') || t.includes('occupied') || t.includes('belegt')) return 'warn';
+            if (t.includes('fault') || t.includes('offline') || t.includes('error') || t.includes('unavailable') || t.includes('störung')) return 'bad';
+            return 'neutral';
+        };
+
+        const getVal = (relId) => {
+            const full = this.namespace + '.' + relId;
+            const st = allStates[full];
+            return st ? st.val : undefined;
+        };
+
+        const updated = new Date().toLocaleString('de-DE');
+        let out = `
+<div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;font-size:16px;">
+  <div style="display:flex;align-items:flex-end;justify-content:space-between;margin-bottom:10px;">
+    <div style="font-weight:900;font-size:18px;">⚡ ChargePoint</div>
+    <div style="opacity:.7;font-size:12px;">${esc(updated)}</div>
+  </div>
+  <div style="display:flex;flex-direction:column;gap:10px;">
+`;
+
+        if (!prefixes.length) {
+            out += `<div style="padding:12px;border:1px solid rgba(255,255,255,.12);border-radius:14px;background:rgba(0,0,0,.18);">Keine Stationsdaten gefunden.</div>`;
+            out += `</div></div>`;
+            return out;
+        }
+
+        for (const p of prefixes) {
+            const name = getVal(p + '.name') ?? p.split('.').pop();
+            const city = getVal(p + '.city') ?? '';
+            const st = getVal(p + '.statusDerived') ?? 'unknown';
+            const ageMin = getVal(p + '.statusAgeMin');
+
+            const ageText = (ageMin !== undefined && ageMin !== null && ageMin !== '')
+                ? `seit ${esc(ageMin)} min`
+                : '';
+
+            out += `
+    <div style="border:1px solid rgba(255,255,255,.12);border-radius:16px;background:rgba(0,0,0,.18);box-shadow:0 10px 24px rgba(0,0,0,.22);padding:12px 14px;">
+      <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:10px;">
+        <div style="min-width:0;">
+          <div style="font-weight:800;font-size:17px;line-height:1.15;">${esc(name)}</div>
+          <div style="opacity:.75;font-size:13px;margin-top:2px;">${esc(city)}</div>
+          ${ageText ? `<div style="opacity:.7;font-size:12px;margin-top:6px;">${ageText}</div>` : ''}
+        </div>
+        <div style="flex:0 0 auto;">${badge(st, kindFromStatus(st))}</div>
+      </div>
+    </div>
+`;
+        }
+
+        out += `
+  </div>
+</div>
+`;
+        return out;
     }
 
     async writeVisHtmlObject() {
