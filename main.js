@@ -1064,6 +1064,12 @@ class CptAdapter extends utils.Adapter {
             const city = getVal(p + '.city') ?? '';
             const st = getVal(p + '.statusDerived') ?? 'unknown';
             const ageMin = getVal(p + '.statusAgeMin');
+            const freePorts = getVal(p + '.freePorts');
+            const portCount = getVal(p + '.portCount');
+
+            const portsText = (freePorts !== undefined && freePorts !== null && portCount !== undefined && portCount !== null)
+                ? `Ports: ${esc(freePorts)}/${esc(portCount)} frei`
+                : '';
 
             const ageText = (ageMin !== undefined && ageMin !== null && ageMin !== '')
                 ? `seit ${esc(ageMin)} min`
@@ -1075,6 +1081,7 @@ class CptAdapter extends utils.Adapter {
         <div style="min-width:0;">
           <div style="font-weight:800;font-size:17px;line-height:1.15;">${esc(name)}</div>
           <div style="opacity:.75;font-size:13px;margin-top:2px;">${esc(city)}</div>
+          ${portsText ? `<div style="opacity:.8;font-size:13px;margin-top:6px;font-weight:650;">${portsText}</div>` : ''}
           ${ageText ? `<div style="opacity:.7;font-size:12px;margin-top:6px;">${ageText}</div>` : ''}
         </div>
         <div style="flex:0 0 auto;">${badge(st, kindFromStatus(st))}</div>
