@@ -29,6 +29,8 @@ class CptAdapter extends utils.Adapter {
         this.pollInterval = null;
 
         this.visHtmlTimer = null;
+        this.nearestTimer = null;
+        this.nearestDebounceMs = 1500;
         this.visHtmlObjectId = (this.config && this.config.visHtmlObjectId) || '0_userdata.0.Vis.ChargePoint.htmlStations';
         this.visHtmlEnabled = (this.config && this.config.visHtmlEnabled !== undefined) ? isTrue(this.config.visHtmlEnabled) : true;
         this.visHtmlDebounceMs = Number((this.config && this.config.visHtmlDebounceMs) || 800);
@@ -422,6 +424,23 @@ class CptAdapter extends utils.Adapter {
         });
     }
 
+    async ensureNearestType2Objects() {
+        await this.setObjectNotExistsAsync('nearestType2', { type: 'channel', common: { name: 'Nächste freie Typ2' }, native: {} });
+
+        const mk = async (id, common) => this.setObjectNotExistsAsync(`nearestType2.${id}`, { type: 'state', common, native: {} });
+
+        await mk('name', { name: 'Name', type: 'string', role: 'text', read: true, write: false });
+        await mk('address', { name: 'Adresse', type: 'string', role: 'text', read: true, write: false });
+        await mk('distance.m', { name: 'Distanz (m)', type: 'number', role: 'value.distance', unit: 'm', read: true, write: false });
+        await mk('distance.km', { name: 'Distanz (km)', type: 'number', role: 'value.distance', unit: 'km', read: true, write: false });
+        await mk('freePorts', { name: 'Freie Ports', type: 'number', role: 'value', read: true, write: false });
+        await mk('portCount', { name: 'Ports gesamt', type: 'number', role: 'value', read: true, write: false });
+        await mk('lat', { name: 'Latitude', type: 'number', role: 'value.gps.latitude', read: true, write: false });
+        await mk('lon', { name: 'Longitude', type: 'number', role: 'value.gps.longitude', read: true, write: false });
+        await mk('stationId', { name: 'Station ID', type: 'string', role: 'text', read: true, write: false });
+        await mk('lastUpdate', { name: 'Letztes Update', type: 'string', role: 'date', read: true, write: false });
+    }
+
     async initCarPosition() {
         // static values from config have priority as initial values
         if (typeof this.carLatStatic === 'number' && Number.isFinite(this.carLatStatic) &&
@@ -466,6 +485,7 @@ class CptAdapter extends utils.Adapter {
         await this.setStateAsync('car.lastUpdate', { val: new Date().toISOString(), ack: true });
         await this.updateDistancesForAllStations();
         await this.handleCarContextChange('posChange');
+        this.scheduleNearestType2Update('carPosChange');
     }
 
     async initCarSoc() {
@@ -478,6 +498,113 @@ class CptAdapter extends utils.Adapter {
             this.carSoc = soc;
             await this.setStateAsync('car.soc', { val: soc, ack: true });
             await this.setStateAsync('car.lastUpdate', { val: new Date().toISOString(), ack: true });
+        }
+
+        // also refresh nearest type2 (SoC change can trigger notifications / relevance)
+        this.scheduleNearestType2Update('socChange');
+    }
+
+    buildBBox(lat, lon, radiusM) {
+        const dLat = radiusM / 111320; // meters per degree latitude
+        const dLon = radiusM / (111320 * Math.cos(lat * Math.PI / 180));
+        return {
+            ne_lat: lat + dLat,
+            ne_lon: lon + dLon,
+            sw_lat: lat - dLat,
+            sw_lon: lon - dLon,
+        };
+    }
+
+    extractNearestType2(resData) {
+        // Try a couple of common response shapes. We only need the first result (already sorted by distance).
+        const candidates = [
+            resData?.station_list?.stations,
+            resData?.station_list?.results,
+            resData?.stations,
+            resData?.results,
+            resData?.data?.station_list?.stations,
+        ];
+        const list = candidates.find((x) => Array.isArray(x)) || [];
+        if (!list.length) return null;
+        return list[0];
+    }
+
+    async updateNearestType2(lat, lon) {
+        if (!isTrue(this.config.nearestType2Enabled)) return;
+        if (!Number.isFinite(lat) || !Number.isFinite(lon)) return;
+
+        const radiusM = Number(this.config.nearestRadiusM) || 2000;
+        const pageSize = Number(this.config.nearestPageSize) || 10;
+        const bbox = this.buildBBox(lat, lon, radiusM);
+
+        const payload = {
+            station_list: {
+                screen_width: 1200,
+                screen_height: 800,
+                ne_lat: bbox.ne_lat,
+                ne_lon: bbox.ne_lon,
+                sw_lat: bbox.sw_lat,
+                sw_lon: bbox.sw_lon,
+                page_size: pageSize,
+                page_offset: '',
+                sort_by: 'distance',
+                reference_lat: lat,
+                reference_lon: lon,
+                include_map_bound: true,
+                filter: {
+                    price_free: false,
+                    status_available: true,
+                    dc_fast_charging: false,
+                    disabled_parking: false,
+                    van_accessible: false,
+                    network_chargepoint: false,
+                    connector_l1_schuko: false,
+                    connector_l2_type1: false,
+                    connector_l2_type2: true,
+                    connector_chademo: false,
+                    connector_combo: false,
+                },
+                bound_output: true,
+            },
+        };
+
+        const url = 'https://mc.chargepoint.com/map-prod/v2?' + encodeURIComponent(JSON.stringify(payload));
+
+        try {
+            const resp = await axios.get(url, { timeout: 15000, validateStatus: () => true });
+            if (resp.status < 200 || resp.status >= 300) {
+                this.log.debug(`nearestType2: HTTP ${resp.status}`);
+                return;
+            }
+            const nearest = this.extractNearestType2(resp.data);
+            if (!nearest) {
+                this.log.debug('nearestType2: keine Treffer');
+                return;
+            }
+
+            const name = nearest.station_name || nearest.name || '';
+            const address = nearest.address || nearest.street_address || nearest.location || '';
+            const distM = parseNumberLocale(nearest.distance ?? nearest.distance_m ?? nearest.distanceMeters ?? nearest.distance_meters);
+            const latS = parseNumberLocale(nearest.latitude ?? nearest.lat);
+            const lonS = parseNumberLocale(nearest.longitude ?? nearest.lon);
+            const freePorts = parseNumberLocale(nearest.available_ports ?? nearest.free_ports ?? nearest.freePorts);
+            const portCount = parseNumberLocale(nearest.port_count ?? nearest.total_ports ?? nearest.portCount);
+            const stationId = String(nearest.station_id ?? nearest.id ?? '').trim();
+
+            if (name) await this.setStateAsync('nearestType2.name', { val: name, ack: true });
+            await this.setStateAsync('nearestType2.address', { val: address || '', ack: true });
+            if (Number.isFinite(distM)) {
+                await this.setStateAsync('nearestType2.distance.m', { val: Math.round(distM), ack: true });
+                await this.setStateAsync('nearestType2.distance.km', { val: Math.round((distM / 1000) * 100) / 100, ack: true });
+            }
+            if (Number.isFinite(freePorts)) await this.setStateAsync('nearestType2.freePorts', { val: Math.round(freePorts), ack: true });
+            if (Number.isFinite(portCount)) await this.setStateAsync('nearestType2.portCount', { val: Math.round(portCount), ack: true });
+            if (Number.isFinite(latS)) await this.setStateAsync('nearestType2.lat', { val: latS, ack: true });
+            if (Number.isFinite(lonS)) await this.setStateAsync('nearestType2.lon', { val: lonS, ack: true });
+            await this.setStateAsync('nearestType2.stationId', { val: stationId, ack: true });
+            await this.setStateAsync('nearestType2.lastUpdate', { val: new Date().toISOString(), ack: true });
+        } catch (e) {
+            this.log.debug(`nearestType2 Fehler: ${e.message}`);
         }
     }
 
@@ -832,6 +959,7 @@ class CptAdapter extends utils.Adapter {
         }
 
         this.scheduleVisHtmlUpdate('poll finished');
+        this.scheduleNearestType2Update('poll finished');
         // remove objects for stations that were removed from config
         await this.cleanupObsoleteStations(currentPrefixes);
 
@@ -999,6 +1127,17 @@ async cleanupObsoleteStations(currentPrefixes) {
             }
         }, this.visHtmlDebounceMs);
         if (reason) this.log.debug(`VIS HTML Update geplant: ${reason}`);
+    }
+
+    scheduleNearestType2Update(reason = '') {
+        if (!isTrue(this.config.nearestType2Enabled)) return;
+        if (!Number.isFinite(this.carLat) || !Number.isFinite(this.carLon)) return;
+        if (this.nearestTimer) clearTimeout(this.nearestTimer);
+        this.nearestTimer = setTimeout(() => {
+            this.updateNearestType2(this.carLat, this.carLon)
+                .catch((e) => this.log.debug(`nearestType2 Update fehlgeschlagen: ${e.message}`));
+        }, this.nearestDebounceMs);
+        if (reason) this.log.debug(`nearestType2 Update geplant: ${reason}`);
     }
 
     async ensureVisHtmlObject() {
@@ -1372,6 +1511,7 @@ async onReady() {
 
         await this.ensureToolsObjects();
         await this.ensureCarObjects();
+        await this.ensureNearestType2Objects();
 
         // subscribe to foreign car position states (optional)
         if (this.carLatStateId) this.subscribeForeignStates(this.carLatStateId);
@@ -1381,6 +1521,7 @@ async onReady() {
         // initialize car position (static or from foreign)
         await this.initCarPosition();
         await this.initCarSoc();
+        this.scheduleNearestType2Update('initial');
 
         this.subscribeStates('tools.export');
         this.subscribeStates('tools.testNotify');
@@ -1568,6 +1709,11 @@ async onReady() {
                 const isOpenWa = instance.startsWith('open-wa.');
                 const isPushover = instance.startsWith('pushover.');
 
+                if (isOpenWa && !user) {
+                    obj.callback && this.sendTo(obj.from, obj.command, { error: 'Für open-wa muss im Feld Empfänger eine Telefonnummer stehen (z.B. +4917...)' }, obj.callback);
+                    return;
+                }
+
                 let payload;
                 if (isTelegram) {
                     payload = { text: 'CPT Test: Kommunikation OK ✅', ...(user ? { user } : {}) };
@@ -1583,6 +1729,8 @@ async onReady() {
                     };
                 } else if (isPushover) {
                     payload = { message: 'CPT Test: Kommunikation OK ✅', sound: '' };
+                } else if (isOpenWa) {
+                    payload = { to: user, text: 'CPT Test: Kommunikation OK ✅' };
                 } else {
                     payload = { text: 'CPT Test: Kommunikation OK ✅' };
                 }
