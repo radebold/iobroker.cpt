@@ -730,6 +730,7 @@ class CptAdapter extends utils.Adapter {
     }
 
     async updateAllStations(stations) {
+        const currentPrefixes = new Set();
         for (const st of stations) {
             const data1 = await this.safeFetch(st.deviceId1);
             const data2 = st.deviceId2 ? await this.safeFetch(st.deviceId2) : null;
@@ -738,6 +739,7 @@ class CptAdapter extends utils.Adapter {
             const cityKey = this.makeSafeName(city) || 'unbekannt';
             const stationKey = this.getStationKey(st);
             const stationPrefix = `stations.${cityKey}.${stationKey}`;
+            currentPrefixes.add(stationPrefix);
 
             this.stationPrefixByName[st.name] = stationPrefix;
 
@@ -832,6 +834,10 @@ class CptAdapter extends utils.Adapter {
         this.scheduleVisHtmlUpdate('poll finished');
     }
 
+        // remove objects for stations that were removed from config
+        await this.cleanupObsoleteStations(currentPrefixes);
+
+
     async updateDistanceForStation(stationPrefixRel, gps) {
         try {
             if (!gps || gps.lat === undefined || gps.lon === undefined) return;
@@ -853,6 +859,71 @@ class CptAdapter extends utils.Adapter {
             this.log.debug(`Distanzberechnung fehlgeschlagen (${stationPrefixRel}): ${e.message}`);
         }
     }
+    async cleanupObsoleteStations(currentPrefixes) {
+        try {
+            const nameStates = await this.getStatesAsync(this.namespace + '.stations.*.*.name');
+            const prefixesExisting = new Set();
+
+            for (const id of Object.keys(nameStates || {})) {
+                // id looks like "cpt.0.stations.<city>.<station>.name"
+                const rel = id.replace(this.namespace + '.', '').replace(/\.name$/, '');
+                prefixesExisting.add(rel);
+            }
+
+            // delete station channels that are no longer in current config
+            for (const relPrefix of prefixesExisting) {
+                if (!currentPrefixes.has(relPrefix)) {
+                    this.log.info(`Removing obsolete station objects: ${relPrefix}`);
+                    await this.delObjectAsync(relPrefix, { recursive: true });
+                }
+            }
+
+            // optionally delete empty city channels
+            const cityStates = await this.getStatesAsync(this.namespace + '.stations.*.name');
+            // City channels have no ".name" state, so we just check remaining station prefixes
+            const remaining = new Set();
+            for (const relPrefix of currentPrefixes) remaining.add(relPrefix);
+
+            // gather all city prefixes currently used
+            const usedCities = new Set();
+            for (const relPrefix of remaining) {
+                const parts = relPrefix.split('.');
+                if (parts.length >= 3) usedCities.add(parts[1]); // stations.<cityKey>.<stationKey>
+            }
+
+            // find existing city channels under stations.*
+            // Use objects view: delete only if no remaining station with that cityKey
+            const startkey = this.namespace + '.stations.';
+            const endkey = this.namespace + '.stations.\u9999';
+            await new Promise((resolve) => {
+                this.getObjectView('system', 'channel', { startkey, endkey }, async (err, res) => {
+                    if (err || !res || !res.rows) return resolve();
+                    for (const row of res.rows) {
+                        const id = row.id || '';
+                        // id like cpt.0.stations.<cityKey>
+                        const rel = id.replace(this.namespace + '.', '');
+                        const parts = rel.split('.');
+                        if (parts.length === 2 && parts[0] === 'stations') {
+                            const cityKey = parts[1];
+                            if (!usedCities.has(cityKey)) {
+                                try {
+                                    this.log.info(`Removing obsolete city channel: ${rel}`);
+                                    await this.delObjectAsync(rel, { recursive: true });
+                                } catch (e) {
+                                    // ignore
+                                }
+                            }
+                        }
+                    }
+                    resolve();
+                });
+            });
+        } catch (e) {
+            this.log.warn(`cleanupObsoleteStations failed: ${e.message || e}`);
+        }
+    }
+
+
 
     async updateDistancesForAllStations() {
         try {
