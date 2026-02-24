@@ -439,6 +439,7 @@ class CptAdapter extends utils.Adapter {
         await mk('lon', { name: 'Longitude', type: 'number', role: 'value.gps.longitude', read: true, write: false });
         await mk('stationId', { name: 'Station ID', type: 'string', role: 'text', read: true, write: false });
         await mk('lastUpdate', { name: 'Letztes Update', type: 'string', role: 'date', read: true, write: false });
+        await mk('lastError', { name: 'Letzter Fehler', type: 'string', role: 'text', read: true, write: false });
     }
 
     async initCarPosition() {
@@ -516,20 +517,48 @@ class CptAdapter extends utils.Adapter {
     }
 
     extractNearestType2(resData) {
-        // Try a couple of common response shapes. We only need the first result (already sorted by distance).
-        const candidates = [
-            resData?.station_list?.stations,
-            resData?.station_list?.results,
-            resData?.stations,
-            resData?.results,
-            resData?.data?.station_list?.stations,
-        ];
-        const list = candidates.find((x) => Array.isArray(x)) || [];
-        if (!list.length) return null;
-        return list[0];
+        // The API response shape can vary. We search for the first array that looks like a station list.
+        const looksLikeStation = (o) =>
+            o && typeof o === 'object' && (
+                'station_name' in o || 'name' in o
+            ) && (
+                'distance' in o || 'distance_m' in o || 'distanceMeters' in o
+            );
+
+        const seen = new Set();
+        const queue = [resData];
+        while (queue.length) {
+            const cur = queue.shift();
+            if (!cur) continue;
+
+            if (Array.isArray(cur)) {
+                if (cur.length && looksLikeStation(cur[0])) return cur[0];
+                // also enqueue array items (nested)
+                for (const it of cur) {
+                    if (it && typeof it === 'object') queue.push(it);
+                }
+                continue;
+            }
+
+            if (typeof cur !== 'object') continue;
+            if (seen.has(cur)) continue;
+            seen.add(cur);
+
+            for (const v of Object.values(cur)) {
+                if (!v) continue;
+                if (Array.isArray(v)) {
+                    if (v.length && looksLikeStation(v[0])) return v[0];
+                    queue.push(v);
+                } else if (typeof v === 'object') {
+                    queue.push(v);
+                }
+            }
+        }
+        return null;
     }
 
     async updateNearestType2(lat, lon) {
+(lat, lon) {
         if (!isTrue(this.config.nearestType2Enabled)) return;
         if (!Number.isFinite(lat) || !Number.isFinite(lon)) return;
 
@@ -571,14 +600,17 @@ class CptAdapter extends utils.Adapter {
         const url = 'https://mc.chargepoint.com/map-prod/v2?' + encodeURIComponent(JSON.stringify(payload));
 
         try {
-            const resp = await axios.get(url, { timeout: 15000, validateStatus: () => true });
+            const resp = await axios.get(url, { timeout: 20000, validateStatus: () => true, headers: { 'User-Agent': 'Mozilla/5.0 (iobroker.cpt)', 'Accept': 'application/json,text/plain,*/*' } });
             if (resp.status < 200 || resp.status >= 300) {
-                this.log.debug(`nearestType2: HTTP ${resp.status}`);
+                this.log.warn(`nearestType2: HTTP ${resp.status}`);
+                await this.setStateAsync('nearestType2.lastError', { val: `HTTP ${resp.status}`, ack: true });
                 return;
             }
             const nearest = this.extractNearestType2(resp.data);
+            await this.setStateAsync('nearestType2.lastError', { val: '', ack: true });
             if (!nearest) {
-                this.log.debug('nearestType2: keine Treffer');
+                this.log.info('nearestType2: keine Treffer');
+                await this.setStateAsync('nearestType2.lastError', { val: 'keine Treffer', ack: true });
                 return;
             }
 
@@ -1696,12 +1728,21 @@ async onReady() {
 
         // dropdown for Abos -> recipient labels
         if (obj.command === 'getRecipients') {
-            const active = this.getActiveChannels();
+            // IMPORTANT: selectSendTo expects an ARRAY of {label,value} (not {options: ...})
+            // Use ALL configured channels (not only enabled), so the dropdown is never empty.
+            const channelsRaw = this.config.channels;
+            let channels = [];
+            if (Array.isArray(channelsRaw)) channels = channelsRaw;
+            else if (channelsRaw && typeof channelsRaw === 'object') channels = Object.values(channelsRaw);
             const labels = new Set();
-            for (const ch of active) {
-                if (ch.label) labels.add(String(ch.label));
+            for (const ch of channels) {
+                if (!ch) continue;
+                const lbl = String(ch.label || ch.name || ch.instance || '').trim();
+                if (lbl) labels.add(lbl);
             }
-            const opts = Array.from(labels).sort().map((l) => ({ value: l, label: l }));
+            const opts = Array.from(labels)
+                .sort((a, b) => a.localeCompare(b, 'de', { sensitivity: 'base' }))
+                .map((l) => ({ value: l, label: l }));
             obj.callback && this.sendTo(obj.from, obj.command, opts, obj.callback);
             return;
         }

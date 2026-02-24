@@ -1,7 +1,7 @@
 {
   "common": {
     "name": "cpt",
-    "version": "0.6.17",
+    "version": "0.6.18",
     "title": "CPT ChargePoint",
     "titleLang": {
       "en": "CPT ChargePoint",
@@ -55,8 +55,7 @@
     "notifyMaxDistanceM": 500,
     "visHtmlMobileObjectId": "0_userdata.0.Vis.ChargePoint.htmlStationsMobile",
     "visHtmlMobileEnabled": true,
-    "notifyCooldownMin": 15
-    ,
+    "notifyCooldownMin": 15,
     "nearestType2Enabled": false,
     "nearestRadiusM": 2000,
     "nearestPageSize": 10
