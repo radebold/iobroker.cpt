@@ -832,11 +832,10 @@ class CptAdapter extends utils.Adapter {
         }
 
         this.scheduleVisHtmlUpdate('poll finished');
-    }
-
         // remove objects for stations that were removed from config
         await this.cleanupObsoleteStations(currentPrefixes);
 
+    }
 
     async updateDistanceForStation(stationPrefixRel, gps) {
         try {
@@ -859,69 +858,58 @@ class CptAdapter extends utils.Adapter {
             this.log.debug(`Distanzberechnung fehlgeschlagen (${stationPrefixRel}): ${e.message}`);
         }
     }
-    async cleanupObsoleteStations(currentPrefixes) {
-        try {
-            const nameStates = await this.getStatesAsync(this.namespace + '.stations.*.*.name');
-            const prefixesExisting = new Set();
+    
+async cleanupObsoleteStations(currentPrefixes) {
+    // currentPrefixes: Set of rel station prefixes like "stations.<cityKey>.<stationKey>"
+    try {
+        const nameStates = await this.getStatesAsync(this.namespace + '.stations.*.*.name');
+        const prefixesExisting = new Set();
 
-            for (const id of Object.keys(nameStates || {})) {
-                // id looks like "cpt.0.stations.<city>.<station>.name"
-                const rel = id.replace(this.namespace + '.', '').replace(/\.name$/, '');
-                prefixesExisting.add(rel);
+        for (const id of Object.keys(nameStates || {})) {
+            // id looks like "cpt.0.stations.<city>.<station>.name"
+            const rel = id.replace(this.namespace + '.', '').replace(/\.name$/, '');
+            prefixesExisting.add(rel);
+        }
+
+        // Delete station channels (and their states) that are no longer in current config
+        for (const relPrefix of prefixesExisting) {
+            if (!currentPrefixes.has(relPrefix)) {
+                this.log.info(`Removing obsolete station objects: ${relPrefix}`);
+                await this.delObjectAsync(relPrefix, { recursive: true });
             }
+        }
 
-            // delete station channels that are no longer in current config
-            for (const relPrefix of prefixesExisting) {
-                if (!currentPrefixes.has(relPrefix)) {
-                    this.log.info(`Removing obsolete station objects: ${relPrefix}`);
-                    await this.delObjectAsync(relPrefix, { recursive: true });
+        // Delete empty city channels (stations.<cityKey>) when no remaining station uses them
+        const usedCities = new Set();
+        for (const relPrefix of currentPrefixes) {
+            const parts = relPrefix.split('.');
+            // stations.<cityKey>.<stationKey>
+            if (parts.length >= 3 && parts[0] === 'stations') usedCities.add(parts[1]);
+        }
+
+        const startkey = this.namespace + '.stations.';
+        const endkey = this.namespace + '.stations.\\u9999';
+
+        // Prefer async API to avoid "await" in callbacks (Node 20 strict mode)
+        const res = await this.getObjectViewAsync('system', 'channel', { startkey, endkey }).catch(() => null);
+        if (res && res.rows) {
+            for (const row of res.rows) {
+                const id = row.id || '';
+                const rel = id.replace(this.namespace + '.', '');
+                const parts = rel.split('.');
+                if (parts.length === 2 && parts[0] === 'stations') {
+                    const cityKey = parts[1];
+                    if (!usedCities.has(cityKey)) {
+                        this.log.info(`Removing obsolete city channel: ${rel}`);
+                        await this.delObjectAsync(rel, { recursive: true });
+                    }
                 }
             }
-
-            // optionally delete empty city channels
-            const cityStates = await this.getStatesAsync(this.namespace + '.stations.*.name');
-            // City channels have no ".name" state, so we just check remaining station prefixes
-            const remaining = new Set();
-            for (const relPrefix of currentPrefixes) remaining.add(relPrefix);
-
-            // gather all city prefixes currently used
-            const usedCities = new Set();
-            for (const relPrefix of remaining) {
-                const parts = relPrefix.split('.');
-                if (parts.length >= 3) usedCities.add(parts[1]); // stations.<cityKey>.<stationKey>
-            }
-
-            // find existing city channels under stations.*
-            // Use objects view: delete only if no remaining station with that cityKey
-            const startkey = this.namespace + '.stations.';
-            const endkey = this.namespace + '.stations.\u9999';
-            await new Promise((resolve) => {
-                this.getObjectView('system', 'channel', { startkey, endkey }, async (err, res) => {
-                    if (err || !res || !res.rows) return resolve();
-                    for (const row of res.rows) {
-                        const id = row.id || '';
-                        // id like cpt.0.stations.<cityKey>
-                        const rel = id.replace(this.namespace + '.', '');
-                        const parts = rel.split('.');
-                        if (parts.length === 2 && parts[0] === 'stations') {
-                            const cityKey = parts[1];
-                            if (!usedCities.has(cityKey)) {
-                                try {
-                                    this.log.info(`Removing obsolete city channel: ${rel}`);
-                                    await this.delObjectAsync(rel, { recursive: true });
-                                } catch (e) {
-                                    // ignore
-                                }
-                            }
-                        }
-                    }
-                    resolve();
-                });
-            });
-        } catch (e) {
-            this.log.warn(`cleanupObsoleteStations failed: ${e.message || e}`);
         }
+    } catch (e) {
+        this.log.warn(`cleanupObsoleteStations failed: ${e && e.message ? e.message : e}`);
     }
+}
 
 
 
