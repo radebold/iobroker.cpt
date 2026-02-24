@@ -1,7 +1,7 @@
 {
   "common": {
     "name": "cpt",
-    "version": "0.6.15",
+    "version": "0.6.17",
     "title": "CPT ChargePoint",
     "titleLang": {
       "en": "CPT ChargePoint",
@@ -56,10 +56,14 @@
     "visHtmlMobileObjectId": "0_userdata.0.Vis.ChargePoint.htmlStationsMobile",
     "visHtmlMobileEnabled": true,
     "notifyCooldownMin": 15
+    ,
+    "nearestType2Enabled": false,
+    "nearestRadiusM": 2000,
+    "nearestPageSize": 10
   },
   "protectedNative": [],
   "encryptedNative": [],
   "objects": [],
   "instanceObjects": [],
-  "version": "0.6.12"
+  "version": "0.6.17"
 }

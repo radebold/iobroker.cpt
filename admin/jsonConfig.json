@@ -332,6 +332,37 @@
             "de": "Mindestabstand zwischen zwei Benachrichtigungen pro Station. 0 = kein Cooldown.",
             "en": "Minimum time between notifications per station. 0 = no cooldown."
           }
+        },
+        "nearestType2Enabled": {
+          "type": "checkbox",
+          "default": false,
+          "label": {
+            "de": "Nächste freie Typ2-Station suchen",
+            "en": "Search nearest available Type2"
+          },
+          "help": {
+            "de": "Ermittelt anhand der Auto-GPS-Position die nächste freie Typ2-Ladestation (ChargePoint Map API).",
+            "en": "Uses car GPS position to find the nearest available Type2 charging station (ChargePoint Map API)."
+          }
+        },
+        "nearestRadiusM": {
+          "type": "number",
+          "min": 100,
+          "default": 2000,
+          "label": {
+            "de": "Suchradius (Meter)",
+            "en": "Search radius (meters)"
+          }
+        },
+        "nearestPageSize": {
+          "type": "number",
+          "min": 1,
+          "max": 50,
+          "default": 10,
+          "label": {
+            "de": "Max. Ergebnisse",
+            "en": "Max results"
+          }
         }
       }
     }
