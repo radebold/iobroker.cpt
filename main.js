@@ -1128,10 +1128,12 @@ class CptAdapter extends utils.Adapter {
 
           <div style="margin-top:8px;">${badge(stationStatus, stationKind)}</div>
 
-          ${portsText ? `<div style="opacity:.85;font-size:13px;margin-top:8px;font-weight:700;">${portsText}</div>` : ''}
-          ${dotsHtml ? `<div style="margin-top:8px;">${dotsHtml}</div>` : ''}
-          ${portsDetailText ? `<div style="opacity:.75;font-size:13px;margin-top:6px;">${esc(portsDetailText)}</div>` : ''}
-          ${ageText ? `<div style="opacity:.65;font-size:12px;margin-top:8px;">${ageText}</div>` : ''}
+        </div>
+        <div style="width:180px;text-align:right;padding-top:2px;">
+          ${portsText ? `<div style="opacity:.9;font-size:12px;font-weight:800;">${portsText}</div>` : ''}
+          ${dotsHtml ? `<div style="margin-top:6px;line-height:1;">${dotsHtml}</div>` : ''}
+          ${portsDetailText ? `<div style="opacity:.8;font-size:11px;margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(portsDetailText)}</div>` : ''}
+          ${ageText ? `<div style="opacity:.65;font-size:11px;margin-top:6px;">${ageText}</div>` : ''}
         </div>
       </div>
     </div>
