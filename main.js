@@ -1014,6 +1014,7 @@ class CptAdapter extends utils.Adapter {
         await this.setForeignStateAsync(id, { val: html, ack: true });
     }
 
+    
     renderStationsHtmlMobile(prefixes, allStates) {
         const esc = (v) => (v === null || v === undefined) ? '' : String(v)
             .replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;');
@@ -1026,15 +1027,17 @@ class CptAdapter extends utils.Adapter {
                 neutral: 'background:rgba(255,255,255,.10); border:1px solid rgba(255,255,255,.18);',
             };
             const st = styles[kind] || styles.neutral;
-            return `<span style="display:inline-flex;align-items:center;gap:6px;padding:6px 10px;border-radius:999px;font-size:13px;font-weight:600;white-space:nowrap;${st}">${esc(text)}</span>`;
+            return `<span style="display:inline-flex;align-items:center;gap:6px;padding:6px 10px;border-radius:999px;font-size:13px;font-weight:700;white-space:nowrap;${st}">${esc(text)}</span>`;
         };
 
-        const kindFromStatus = (s) => {
-            const t = String(s || '').toLowerCase();
-            if (t.includes('available') || t.includes('frei') || t.includes('online') || t.includes('ok')) return 'ok';
-            if (t.includes('charging') || t.includes('in_use') || t.includes('occupied') || t.includes('belegt')) return 'warn';
-            if (t.includes('fault') || t.includes('offline') || t.includes('error') || t.includes('unavailable') || t.includes('störung')) return 'bad';
-            return 'neutral';
+        const portDot = (kind) => {
+            const map = {
+                ok: '#2ecc71',
+                bad: '#e74c3c',
+                neutral: 'rgba(255,255,255,.45)',
+            };
+            const c = map[kind] || map.neutral;
+            return `<span style="font-size:20px;line-height:1;color:${c};margin-right:6px;">●</span>`;
         };
 
         const getVal = (relId) => {
@@ -1062,29 +1065,74 @@ class CptAdapter extends utils.Adapter {
         for (const p of prefixes) {
             const name = getVal(p + '.name') ?? p.split('.').pop();
             const city = getVal(p + '.city') ?? '';
-            const st = getVal(p + '.statusDerived') ?? 'unknown';
-            const ageMin = getVal(p + '.statusAgeMin');
+
             const freePorts = getVal(p + '.freePorts');
             const portCount = getVal(p + '.portCount');
 
-            const portsText = (freePorts !== undefined && freePorts !== null && portCount !== undefined && portCount !== null)
-                ? `Ports: ${esc(freePorts)}/${esc(portCount)} frei`
+            // Station status (Deutsch, verständlich)
+            let stationStatus = 'Unbekannt';
+            let stationKind = 'neutral';
+            if (freePorts !== undefined && freePorts !== null && freePorts !== '') {
+                const fp = Number(freePorts);
+                if (!Number.isNaN(fp)) {
+                    if (fp > 0) {
+                        stationStatus = 'Frei';
+                        stationKind = 'ok';
+                    } else {
+                        stationStatus = 'Belegt';
+                        stationKind = 'bad';
+                    }
+                }
+            }
+
+            const portsText = (freePorts !== undefined && freePorts !== null && freePorts !== '' &&
+                portCount !== undefined && portCount !== null && portCount !== '')
+                ? `Ports: ${esc(freePorts)} / ${esc(portCount)} frei`
                 : '';
 
+            const ageMin = getVal(p + '.statusAgeMin');
             const ageText = (ageMin !== undefined && ageMin !== null && ageMin !== '')
                 ? `seit ${esc(ageMin)} min`
                 : '';
+
+            // Ports (Variante 1 + 2)
+            let dotsHtml = '';
+            let portsDetailText = '';
+            const pc = (portCount !== undefined && portCount !== null && portCount !== '') ? Number(portCount) : NaN;
+
+            if (!Number.isNaN(pc) && pc > 0) {
+                const parts = [];
+                for (let i = 1; i <= pc; i++) {
+                    const s2 = getVal(p + `.ports.${i}.statusV2`);
+                    const s1 = getVal(p + `.ports.${i}.status`);
+                    const raw = (s2 ?? s1 ?? 'unknown');
+
+                    const norm = String(raw || 'unknown').toLowerCase();
+                    const isFree = norm.includes('available') || norm.includes('frei');
+                    const isUnknown = norm === 'unknown' || norm === '' || norm.includes('unavailable') && !isFree;
+
+                    const kind = isFree ? 'ok' : (isUnknown ? 'neutral' : 'bad');
+                    dotsHtml += portDot(kind);
+
+                    parts.push(`P${i} ${isFree ? 'frei' : 'belegt'}`);
+                }
+                portsDetailText = parts.join(' · ');
+            }
 
             out += `
     <div style="border:1px solid rgba(255,255,255,.12);border-radius:16px;background:rgba(0,0,0,.18);box-shadow:0 10px 24px rgba(0,0,0,.22);padding:12px 14px;">
       <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:10px;">
         <div style="min-width:0;">
-          <div style="font-weight:800;font-size:17px;line-height:1.15;">${esc(name)}</div>
+          <div style="font-weight:850;font-size:17px;line-height:1.15;">${esc(name)}</div>
           <div style="opacity:.75;font-size:13px;margin-top:2px;">${esc(city)}</div>
-          ${portsText ? `<div style="opacity:.8;font-size:13px;margin-top:6px;font-weight:650;">${portsText}</div>` : ''}
-          ${ageText ? `<div style="opacity:.7;font-size:12px;margin-top:6px;">${ageText}</div>` : ''}
+
+          <div style="margin-top:8px;">${badge(stationStatus, stationKind)}</div>
+
+          ${portsText ? `<div style="opacity:.85;font-size:13px;margin-top:8px;font-weight:700;">${portsText}</div>` : ''}
+          ${dotsHtml ? `<div style="margin-top:8px;">${dotsHtml}</div>` : ''}
+          ${portsDetailText ? `<div style="opacity:.75;font-size:13px;margin-top:6px;">${esc(portsDetailText)}</div>` : ''}
+          ${ageText ? `<div style="opacity:.65;font-size:12px;margin-top:8px;">${ageText}</div>` : ''}
         </div>
-        <div style="flex:0 0 auto;">${badge(st, kindFromStatus(st))}</div>
       </div>
     </div>
 `;
@@ -1096,6 +1144,7 @@ class CptAdapter extends utils.Adapter {
 `;
         return out;
     }
+
 
     async writeVisHtmlObject() {
         if (!this.visHtmlEnabled) return;
