@@ -558,7 +558,8 @@ class CptAdapter extends utils.Adapter {
     }
 
     async updateNearestType2(lat, lon) {
-(lat, lon) {
+        // NOTE: A previous build accidentally inserted an invalid stray "(lat, lon) {" line here.
+        // Keep this method as the only function header.
         if (!isTrue(this.config.nearestType2Enabled)) return;
         if (!Number.isFinite(lat) || !Number.isFinite(lon)) return;
 
