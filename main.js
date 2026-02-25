@@ -99,8 +99,19 @@ class CptAdapter extends utils.Adapter {
     }
 
     pickCity(data1, data2) {
-        const c1 = data1?.address?.city;
-        const c2 = data2?.address?.city;
+        const pick = (d) => (
+            d?.city ||
+            d?.address?.city ||
+            d?.address?.town ||
+            d?.address?.locality ||
+            d?.address?.municipality ||
+            d?.address?.cityName ||
+            d?.address?.place ||
+            d?.address?.place_name
+        );
+
+        const c1 = pick(data1);
+        const c2 = pick(data2);
         return (c1 || c2 || 'Unbekannt').toString().trim() || 'Unbekannt';
     }
 
@@ -660,7 +671,13 @@ class CptAdapter extends utils.Adapter {
             }
 
             const name = nearest.station_name || nearest.name || nearest.name1 || '';
-            const address = nearest.address || nearest.address1 || nearest.street_address || nearest.location || '';
+            // Build a full address if possible (street + zip + city). Fallback to whatever is available.
+            const street = (nearest.address1 || nearest.street_address || nearest.address || '').toString().trim();
+            const street2 = (nearest.address2 || '').toString().trim();
+            const zip = (nearest.postal_code || nearest.postalCode || nearest.zip || '').toString().trim();
+            const city = (nearest.city || nearest.town || nearest.locality || nearest.municipality || '').toString().trim();
+            const zipCity = [zip, city].filter(Boolean).join(' ').trim();
+            const addressFull = [street, street2, zipCity].filter(Boolean).join(', ').trim() || (nearest.location || '').toString().trim();
             let distM = parseNumberLocale(nearest.__distanceM ?? nearest.distance ?? nearest.distance_m ?? nearest.distanceMeters ?? nearest.distance_meters);
             const stLat = parseNumberLocale(nearest.lat ?? nearest.latitude);
             const stLon = parseNumberLocale(nearest.lon ?? nearest.longitude);
@@ -686,7 +703,7 @@ class CptAdapter extends utils.Adapter {
             const stationId = String(nearest.device_id ?? nearest.station_id ?? nearest.id ?? '').trim();
 
             if (name) await this.setStateAsync('nearestType2.name', { val: name, ack: true });
-            await this.setStateAsync('nearestType2.address', { val: address || '', ack: true });
+            await this.setStateAsync('nearestType2.address', { val: addressFull || '', ack: true });
             if (Number.isFinite(distM)) {
                 await this.setStateAsync('nearestType2.distance.m', { val: Math.round(distM), ack: true });
                 await this.setStateAsync('nearestType2.distance.km', { val: Math.round((distM / 1000) * 100) / 100, ack: true });
