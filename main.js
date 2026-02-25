@@ -1289,9 +1289,6 @@ async cleanupObsoleteStations(currentPrefixes) {
 
         const root = this.namespace + '.stations.';
         const all = await this.getStatesAsync(root + '*');
-        // Include nearestType2 states for VIS rendering
-        const nearest = await this.getStatesAsync(this.namespace + '.nearestType2.*');
-        Object.assign(all, nearest);
 
         const prefixesAll = Object.keys(all || {})
             .filter((k) => k.endsWith('.name') && all[k] && all[k].val !== undefined)
@@ -1348,38 +1345,6 @@ async cleanupObsoleteStations(currentPrefixes) {
     <div style="font-weight:900;font-size:18px;">⚡ ChargePoint</div>
     <div style="opacity:.7;font-size:12px;">${esc(updated)}</div>
   </div>
-  ${(() => {
-      const nName = getVal('nearestType2.name');
-      const nErr  = getVal('nearestType2.lastError');
-      const nDist = getVal('nearestType2.distance.m');
-      const nFP   = getVal('nearestType2.freePorts');
-      const nPC   = getVal('nearestType2.portCount');
-      const nAddr = getVal('nearestType2.address');
-      if (!nName && !nErr) return '';
-
-      const distTxt = (nDist !== undefined && nDist !== null && nDist !== '') ? `${esc(nDist)} m` : '';
-      const portsTxt = (nFP !== undefined && nFP !== null && nFP !== '' && nPC !== undefined && nPC !== null && nPC !== '')
-          ? `${esc(nFP)} / ${esc(nPC)} frei`
-          : '';
-      const right = [distTxt, portsTxt].filter(Boolean).join(' · ');
-
-      const title = nName ? esc(nName) : 'Keine Treffer';
-      const subtitle = nAddr ? esc(nAddr) : (nErr ? esc(nErr) : '');
-      const kind = nName ? 'ok' : 'neutral';
-
-      return `
-  <div style="border:1px solid rgba(255,255,255,.12);border-radius:16px;background:rgba(0,0,0,.18);box-shadow:0 10px 24px rgba(0,0,0,.22);padding:12px 14px;margin-bottom:10px;">
-    <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:10px;">
-      <div style="min-width:0;">
-        <div style="font-weight:900;font-size:14px;opacity:.85;">Nächste freie Typ2</div>
-        <div style="font-weight:850;font-size:16px;line-height:1.15;margin-top:3px;">${title}</div>
-        ${subtitle ? `<div style="opacity:.75;font-size:12px;margin-top:3px;">${subtitle}</div>` : ''}
-        <div style="margin-top:8px;">${badge(nName ? 'Frei' : 'Keine Treffer', kind)}</div>
-      </div>
-      ${right ? `<div style="text-align:right;opacity:.9;font-size:12px;font-weight:800;white-space:nowrap;">${right}</div>` : ''}
-    </div>
-  </div>`;
-  })()}
   <div style="display:flex;flex-direction:column;gap:10px;">
 `;
 
@@ -1481,9 +1446,6 @@ async cleanupObsoleteStations(currentPrefixes) {
 
         const root = this.namespace + '.stations.';
         const all = await this.getStatesAsync(root + '*');
-        // Include nearestType2 states for VIS rendering
-        const nearest = await this.getStatesAsync(this.namespace + '.nearestType2.*');
-        Object.assign(all, nearest);
 
         const prefixesAll = Object.keys(all || {})
             .filter((k) => k.endsWith('.name') && all[k] && all[k].val !== undefined)
@@ -1545,39 +1507,6 @@ async cleanupObsoleteStations(currentPrefixes) {
     <div style="font-weight:800;font-size:16px;">⚡ ChargePoint</div>
     <div style="opacity:.75;font-size:12px;">Update: ${esc(updated)}</div>
   </div>
-  ${(() => {
-      const nName = getVal('nearestType2.name');
-      const nErr  = getVal('nearestType2.lastError');
-      const nDist = getVal('nearestType2.distance.m');
-      const nFP   = getVal('nearestType2.freePorts');
-      const nPC   = getVal('nearestType2.portCount');
-      const nAddr = getVal('nearestType2.address');
-
-      if (!nName && !nErr) return '';
-
-      const distTxt = (nDist !== undefined && nDist !== null && nDist !== '') ? `${esc(nDist)} m` : '';
-      const portsTxt = (nFP !== undefined && nFP !== null && nFP !== '' && nPC !== undefined && nPC !== null && nPC !== '')
-          ? `${esc(nFP)} / ${esc(nPC)} frei`
-          : '';
-      const right = [distTxt, portsTxt].filter(Boolean).join(' · ');
-
-      const title = nName ? esc(nName) : 'Keine Treffer';
-      const subtitle = nAddr ? esc(nAddr) : (nErr ? esc(nErr) : '');
-      const kind = nName ? 'ok' : 'neutral';
-
-      return `
-  <div style="border:1px solid rgba(255,255,255,.12);border-radius:14px;background:rgba(0,0,0,.18);box-shadow:0 10px 24px rgba(0,0,0,.28);padding:10px 12px;margin-bottom:10px;">
-    <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;">
-      <div style="min-width:0;">
-        <div style="font-weight:900;font-size:13px;opacity:.85;">Nächste freie Typ2</div>
-        <div style="font-weight:800;font-size:15px;line-height:1.2;margin-top:2px;">${title}</div>
-        ${subtitle ? `<div style="opacity:.75;font-size:12px;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${subtitle}</div>` : ''}
-        <div style="margin-top:6px;">${badge(nName ? 'Frei' : 'Keine Treffer', kind)}</div>
-      </div>
-      ${right ? `<div style="text-align:right;opacity:.9;font-size:12px;font-weight:800;white-space:nowrap;">${right}</div>` : ''}
-    </div>
-  </div>`;
-  })()}
   <div style="border:1px solid rgba(255,255,255,.12);border-radius:14px;overflow:hidden;background:rgba(0,0,0,.18);box-shadow:0 10px 24px rgba(0,0,0,.28);">
 `;
 
