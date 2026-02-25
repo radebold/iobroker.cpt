@@ -582,23 +582,17 @@ class CptAdapter extends utils.Adapter {
                 reference_lon: lon,
                 include_map_bound: true,
                 filter: {
-                    price_free: false,
                     status_available: true,
-                    dc_fast_charging: false,
-                    disabled_parking: false,
-                    van_accessible: false,
-                    network_chargepoint: false,
-                    connector_l1_schuko: false,
-                    connector_l2_type1: false,
                     connector_l2_type2: true,
-                    connector_chademo: false,
-                    connector_combo: false,
                 },
                 bound_output: true,
             },
         };
 
         const url = 'https://mc.chargepoint.com/map-prod/v2?' + encodeURIComponent(JSON.stringify(payload));
+        // Debug: URL und Payload loggen (zum Vergleich mit Browser-Link)
+        this.log.debug('nearestType2 payload: ' + JSON.stringify(payload));
+        this.log.info('nearestType2 URL: ' + url);
 
         try {
             const resp = await axios.get(url, { timeout: 20000, validateStatus: () => true, headers: { 'User-Agent': 'Mozilla/5.0 (iobroker.cpt)', 'Accept': 'application/json,text/plain,*/*' } });
