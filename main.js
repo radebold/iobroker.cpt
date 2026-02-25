@@ -513,7 +513,11 @@ class CptAdapter extends utils.Adapter {
     }
 
     buildBBox(lat, lon, radiusM) {
-        const dLat = radiusM / 111320; // meters per degree latitude
+        // Convert radius in meters to a bounding box (NE/SW) around the reference point.
+        // The ChargePoint map endpoint expects a box, not a circle.
+        // Use a slightly more precise meters-per-degree approximation.
+        const metersPerDegLat = 111132; // ~ average
+        const dLat = radiusM / metersPerDegLat;
         const dLon = radiusM / (111320 * Math.cos(lat * Math.PI / 180));
         return {
             ne_lat: lat + dLat,
@@ -603,6 +607,7 @@ class CptAdapter extends utils.Adapter {
         // Debug: URL und Payload loggen (zum Vergleich mit Browser-Link)
         this.log.debug('nearestType2 payload: ' + JSON.stringify(payload));
         this.log.info('nearestType2 URL: ' + url);
+        this.log.debug(`nearestType2 bbox: NE(${bbox.ne_lat}, ${bbox.ne_lon}) SW(${bbox.sw_lat}, ${bbox.sw_lon}) r=${radiusM}m`);
 
         try {
             const resp = await axios.get(url, { timeout: 20000, validateStatus: () => true, headers: { 'User-Agent': 'Mozilla/5.0 (iobroker.cpt)', 'Accept': 'application/json,text/plain,*/*' } });
@@ -611,7 +616,42 @@ class CptAdapter extends utils.Adapter {
                 await this.setStateAsync('nearestType2.lastError', { val: `HTTP ${resp.status}`, ack: true });
                 return;
             }
-            const nearest = this.extractNearestType2(resp.data);
+            // Axios may return plain text even if it is JSON. Be robust.
+            let data = resp.data;
+            if (typeof data === 'string') {
+                try {
+                    data = JSON.parse(data);
+                } catch {
+                    // keep as-is
+                }
+            }
+
+            // Prefer the known response shape: station_list.stations
+            const stations = data?.station_list?.stations;
+            let nearest = null;
+            if (Array.isArray(stations) && stations.length) {
+                // Compute distance locally (the API sometimes omits `distance`).
+                let best = null;
+                let bestM = Infinity;
+                for (const st of stations) {
+                    const stLat = parseNumberLocale(st?.lat ?? st?.latitude);
+                    const stLon = parseNumberLocale(st?.lon ?? st?.longitude);
+                    if (!Number.isFinite(stLat) || !Number.isFinite(stLon)) continue;
+                    const km = this.haversineKm(lat, lon, stLat, stLon);
+                    const m = km * 1000;
+                    if (m < bestM) {
+                        bestM = m;
+                        best = st;
+                    }
+                }
+                nearest = best || stations[0];
+                if (Number.isFinite(bestM) && bestM !== Infinity) {
+                    // attach computed distance for later state writing
+                    nearest.__distanceM = bestM;
+                }
+            } else {
+                nearest = this.extractNearestType2(data);
+            }
             await this.setStateAsync('nearestType2.lastError', { val: '', ack: true });
             if (!nearest) {
                 this.log.info('nearestType2: keine Treffer');
@@ -621,7 +661,7 @@ class CptAdapter extends utils.Adapter {
 
             const name = nearest.station_name || nearest.name || nearest.name1 || '';
             const address = nearest.address || nearest.address1 || nearest.street_address || nearest.location || '';
-            let distM = parseNumberLocale(nearest.distance ?? nearest.distance_m ?? nearest.distanceMeters ?? nearest.distance_meters);
+            let distM = parseNumberLocale(nearest.__distanceM ?? nearest.distance ?? nearest.distance_m ?? nearest.distanceMeters ?? nearest.distance_meters);
             const stLat = parseNumberLocale(nearest.lat ?? nearest.latitude);
             const stLon = parseNumberLocale(nearest.lon ?? nearest.longitude);
             if (!Number.isFinite(distM) && Number.isFinite(stLat) && Number.isFinite(stLon)) {
