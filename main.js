@@ -517,12 +517,16 @@ class CptAdapter extends utils.Adapter {
     }
 
     extractNearestType2(resData) {
-        // The API response shape can vary. We search for the first array that looks like a station list.
+        // Fast-path: expected response shape (what the browser shows)
+        const arr = resData?.station_list?.stations;
+        if (Array.isArray(arr) && arr.length) return arr[0];
+
+        // Fallback: search for the first array of station-like objects
         const looksLikeStation = (o) =>
             o && typeof o === 'object' && (
-                'station_name' in o || 'name' in o
+                'station_name' in o || 'name' in o || 'name1' in o
             ) && (
-                'distance' in o || 'distance_m' in o || 'distanceMeters' in o
+                ('lat' in o && 'lon' in o) || ('latitude' in o && 'longitude' in o) || ('device_id' in o)
             );
 
         const seen = new Set();
@@ -533,7 +537,6 @@ class CptAdapter extends utils.Adapter {
 
             if (Array.isArray(cur)) {
                 if (cur.length && looksLikeStation(cur[0])) return cur[0];
-                // also enqueue array items (nested)
                 for (const it of cur) {
                     if (it && typeof it === 'object') queue.push(it);
                 }
@@ -609,14 +612,31 @@ class CptAdapter extends utils.Adapter {
                 return;
             }
 
-            const name = nearest.station_name || nearest.name || '';
-            const address = nearest.address || nearest.street_address || nearest.location || '';
-            const distM = parseNumberLocale(nearest.distance ?? nearest.distance_m ?? nearest.distanceMeters ?? nearest.distance_meters);
-            const latS = parseNumberLocale(nearest.latitude ?? nearest.lat);
-            const lonS = parseNumberLocale(nearest.longitude ?? nearest.lon);
-            const freePorts = parseNumberLocale(nearest.available_ports ?? nearest.free_ports ?? nearest.freePorts);
-            const portCount = parseNumberLocale(nearest.port_count ?? nearest.total_ports ?? nearest.portCount);
-            const stationId = String(nearest.station_id ?? nearest.id ?? '').trim();
+            const name = nearest.station_name || nearest.name || nearest.name1 || '';
+            const address = nearest.address || nearest.address1 || nearest.street_address || nearest.location || '';
+            let distM = parseNumberLocale(nearest.distance ?? nearest.distance_m ?? nearest.distanceMeters ?? nearest.distance_meters);
+            const stLat = parseNumberLocale(nearest.lat ?? nearest.latitude);
+            const stLon = parseNumberLocale(nearest.lon ?? nearest.longitude);
+            if (!Number.isFinite(distM) && Number.isFinite(stLat) && Number.isFinite(stLon)) {
+                // compute haversine distance (meters)
+                const R = 6371000;
+                const toRad = (x) => (x * Math.PI) / 180;
+                const dLat = toRad(stLat - lat);
+                const dLon = toRad(stLon - lon);
+                const a = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(lat)) * Math.cos(toRad(stLat)) * Math.sin(dLon / 2) ** 2;
+                const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+                distM = R * c;
+            }
+            const latS = parseNumberLocale(nearest.lat ?? nearest.latitude);
+            const lonS = parseNumberLocale(nearest.lon ?? nearest.longitude);
+            const portsArr = Array.isArray(nearest.ports) ? nearest.ports : [];
+            const freePorts = Number.isFinite(parseNumberLocale(nearest.free_ports ?? nearest.freePorts))
+                ? parseNumberLocale(nearest.free_ports ?? nearest.freePorts)
+                : portsArr.filter(p => String(p?.status_v2 ?? p?.statusV2 ?? p?.status).toLowerCase() === 'available').length;
+            const portCount = Number.isFinite(parseNumberLocale(nearest.total_port_count ?? nearest.portCount))
+                ? parseNumberLocale(nearest.total_port_count ?? nearest.portCount)
+                : (Number.isFinite(parseNumberLocale(nearest.total_port_count)) ? parseNumberLocale(nearest.total_port_count) : portsArr.length);
+            const stationId = String(nearest.device_id ?? nearest.station_id ?? nearest.id ?? '').trim();
 
             if (name) await this.setStateAsync('nearestType2.name', { val: name, ack: true });
             await this.setStateAsync('nearestType2.address', { val: address || '', ack: true });
