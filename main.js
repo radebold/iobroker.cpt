@@ -68,6 +68,9 @@ class CptAdapter extends utils.Adapter {
         // per-station notify memory to avoid duplicates
         this.notifyMetaByStation = {}; // { [stationPrefixRel]: { inRange:boolean, notified:boolean, lastSent:number } }
         this.stationPrefixes = [];
+
+        // remember which incomplete stations were already warned (avoid log spam)
+        this.invalidStationWarned = new Set();
         this.stationInfoByPrefix = {}; // { [prefix]: { city, name } }
 
         this.on('ready', this.onReady.bind(this));
@@ -101,6 +104,8 @@ class CptAdapter extends utils.Adapter {
     pickCity(data1, data2) {
         const pick = (d) => (
             d?.city ||
+            d?.location?.city ||
+            d?.location?.town ||
             d?.address?.city ||
             d?.address?.town ||
             d?.address?.locality ||
@@ -114,6 +119,7 @@ class CptAdapter extends utils.Adapter {
         const c2 = pick(data2);
         return (c1 || c2 || 'Unbekannt').toString().trim() || 'Unbekannt';
     }
+
 
     getStationKey(station) {
         const base = station?.name ? station.name : `station_${station?.deviceId1}`;
@@ -868,6 +874,7 @@ class CptAdapter extends utils.Adapter {
             ['deviceId1', { name: 'Device ID (P1)', type: 'string', role: 'value', read: true, write: false }],
             ['deviceId2', { name: 'Device ID (P2)', type: 'string', role: 'value', read: true, write: false }],
             ['enabled', { name: 'Aktiv', type: 'boolean', role: 'indicator', read: true, write: false }],
+            ['valid', { name: 'Valid (vollständige Daten)', type: 'boolean', role: 'indicator', read: true, write: false }],
             ['notifyOnAvailable', { name: 'Benachrichtigen wenn verfügbar', type: 'boolean', role: 'switch', read: true, write: true, def: false }],
             ['testNotify', { name: 'Test: Notify (Button)', type: 'boolean', role: 'button', read: true, write: true, def: false }],
             ['statusDerived', { name: 'Status (aus Ports)', type: 'string', role: 'value', read: true, write: false }],
@@ -917,6 +924,12 @@ class CptAdapter extends utils.Adapter {
         await this.setStateAsync(`${stationPrefix}.deviceId1`, { val: String(station.deviceId1 ?? ''), ack: true });
         await this.setStateAsync(`${stationPrefix}.deviceId2`, { val: station.deviceId2 ? String(station.deviceId2) : '', ack: true });
         await this.setStateAsync(`${stationPrefix}.enabled`, { val: !!station.enabled, ack: true });
+
+        // default valid=true; will be updated on poll based on real API data
+        const curValid = await this.getStateAsync(`${stationPrefix}.valid`).catch(() => null);
+        if (!curValid || curValid.val === null || curValid.val === undefined) {
+            await this.setStateAsync(`${stationPrefix}.valid`, { val: true, ack: true });
+        }
 
         const curNotify = await this.getStateAsync(`${stationPrefix}.notifyOnAvailable`).catch(() => null);
         if (!curNotify || curNotify.val === null || curNotify.val === undefined) {
@@ -1011,6 +1024,25 @@ class CptAdapter extends utils.Adapter {
             const portCount = st.deviceId2 ? 2 : ports.length;
             const freePorts = ports.reduce((acc, p) => acc + (this.normalizeStatus(p?.statusV2 || p?.status) === 'available' ? 1 : 0), 0);
             const derived = this.deriveStationStatusFromPorts(ports);
+
+            // validity check: hide stations with incomplete base data (e.g. missing city/gps/ports)
+            const cityName = String(city || '').trim();
+            const isUnknownCity = !cityName || cityName === 'Unbekannt';
+            const hasGps = gps && Number.isFinite(gps.lat) && Number.isFinite(gps.lon);
+            const hasPorts = Number.isFinite(portCount) && portCount > 0;
+            const hasName = !!String(st.name || '').trim();
+            const valid = hasName && !isUnknownCity && hasGps && hasPorts;
+
+            await this.updateStateIfChanged(`${stationPrefix}.valid`, valid);
+
+            if (!valid) {
+                const key = stationPrefix;
+                if (!this.invalidStationWarned.has(key)) {
+                    this.invalidStationWarned.add(key);
+                    this.log.warn(`Station unvollständig -> wird in VIS nicht angezeigt: ${key} name="${st.name}" city="${cityName || ''}" gps=${hasGps ? `${gps.lat}/${gps.lon}` : 'missing'} portCount=${portCount}`);
+                }
+            }
+
 
             const prevFree = this.lastFreePortsByStation[stationPrefix];
 
@@ -1304,24 +1336,30 @@ async cleanupObsoleteStations(currentPrefixes) {
         if (!this.visHtmlMobileEnabled) return;
         const id = this.visHtmlMobileObjectId;
 
-        const root = this.namespace + '.stations.';
-        const all = await this.getStatesAsync(root + '*');
+        const stationsRoot = this.namespace + '.stations.';
+        const stationStates = await this.getStatesAsync(stationsRoot + '*');
+        const nearestStates = await this.getStatesAsync(this.namespace + '.nearestType2.*');
 
-        const prefixesAll = Object.keys(all || {})
-            .filter((k) => k.endsWith('.name') && all[k] && all[k].val !== undefined)
+        const all = { ...(stationStates || {}), ...(nearestStates || {}) };
+
+        const prefixesAll = Object.keys(stationStates || {})
+            .filter((k) => k.endsWith('.name') && stationStates[k] && stationStates[k].val !== undefined)
             .map((k) => k.replace(this.namespace + '.', '').replace(/\.name$/, ''))
             .sort((a, b) => a.localeCompare(b));
 
-        // Only show active stations in VIS (enabled in config)
+        // Only show active AND valid stations in VIS (enabled in config)
         const prefixes = prefixesAll.filter((p) => {
-            const en = all[this.namespace + '.' + p + '.enabled']?.val;
-            return en === true;
+            const en = stationStates[this.namespace + '.' + p + '.enabled']?.val === true;
+            const valid = stationStates[this.namespace + '.' + p + '.valid']?.val !== false;
+            const city = stationStates[this.namespace + '.' + p + '.city']?.val;
+            return en && valid && city && String(city) !== 'Unbekannt';
         });
 
         const html = this.renderStationsHtmlMobile(prefixes, all);
         await this.ensureVisHtmlMobileObject();
         await this.setForeignStateAsync(id, { val: html, ack: true });
     }
+
 
     
     renderStationsHtmlMobile(prefixes, allStates) {
@@ -1362,6 +1400,42 @@ async cleanupObsoleteStations(currentPrefixes) {
     <div style="font-weight:900;font-size:18px;">⚡ ChargePoint</div>
     <div style="opacity:.7;font-size:12px;">${esc(updated)}</div>
   </div>
+
+  ${(() => {
+      const nName  = getVal('nearestType2.name') ?? '';
+      const nAddr  = getVal('nearestType2.address') ?? '';
+      const nDistM = getVal('nearestType2.distance.m');
+      const nFree  = getVal('nearestType2.freePorts');
+      const nPorts = getVal('nearestType2.portCount');
+      const nErr   = getVal('nearestType2.lastError') ?? '';
+
+      const has = !!String(nName).trim();
+      const distTxt = (nDistM !== undefined && nDistM !== null && nDistM !== '') ? `${Math.round(Number(nDistM))} m` : '—';
+      const portsTxt = (nFree !== undefined && nPorts !== undefined && nFree !== null && nPorts !== null && nFree !== '' && nPorts !== '') ? `${nFree}/${nPorts} frei` : '—';
+
+      const statusKind = has ? ((Number(nFree) > 0) ? 'ok' : 'warn') : 'bad';
+      const statusText = has ? ((Number(nFree) > 0) ? 'Frei' : 'Belegt') : 'Keine Treffer';
+
+      const title = has ? esc(nName) : 'Keine Treffer';
+      const addr = has ? esc(nAddr) : esc(nErr || 'Keine Station im Umkreis gefunden');
+
+      return `
+  <div style="border:1px solid rgba(255,255,255,.12);border-radius:14px;padding:12px;background:rgba(0,0,0,.18);">
+    <div style="display:flex;justify-content:space-between;gap:10px;">
+      <div style="min-width:0;">
+        <div style="font-weight:900;font-size:14px;">🧭 Nächste freie Typ2</div>
+        <div style="margin-top:6px;font-size:15px;font-weight:900;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${title}</div>
+        <div style="opacity:.85;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${addr}</div>
+        <div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap;">
+          ${badge(distTxt, 'neutral')}
+          ${badge(portsTxt, statusKind)}
+        </div>
+      </div>
+      <div style="flex:0 0 auto;">${badge(statusText, statusKind)}</div>
+    </div>
+  </div>`;
+  })()}
+
   <div style="display:flex;flex-direction:column;gap:10px;">
 `;
 
@@ -1461,24 +1535,30 @@ async cleanupObsoleteStations(currentPrefixes) {
         if (!this.visHtmlEnabled) return;
         const id = this.visHtmlObjectId;
 
-        const root = this.namespace + '.stations.';
-        const all = await this.getStatesAsync(root + '*');
+        const stationsRoot = this.namespace + '.stations.';
+        const stationStates = await this.getStatesAsync(stationsRoot + '*');
+        const nearestStates = await this.getStatesAsync(this.namespace + '.nearestType2.*');
 
-        const prefixesAll = Object.keys(all || {})
-            .filter((k) => k.endsWith('.name') && all[k] && all[k].val !== undefined)
+        const all = { ...(stationStates || {}), ...(nearestStates || {}) };
+
+        const prefixesAll = Object.keys(stationStates || {})
+            .filter((k) => k.endsWith('.name') && stationStates[k] && stationStates[k].val !== undefined)
             .map((k) => k.replace(this.namespace + '.', '').replace(/\.name$/, ''))
             .sort((a, b) => a.localeCompare(b));
 
-        // Only show active stations in VIS (filter out disabled stations marked as 'deaktiviert')
+        // Only show active AND valid stations in VIS
         const prefixes = prefixesAll.filter((p) => {
-            const en = all[this.namespace + '.' + p + '.enabled']?.val;
-            return en === true;
+            const en = stationStates[this.namespace + '.' + p + '.enabled']?.val === true;
+            const valid = stationStates[this.namespace + '.' + p + '.valid']?.val !== false; // default true
+            const city = stationStates[this.namespace + '.' + p + '.city']?.val;
+            return en && valid && city && String(city) !== 'Unbekannt';
         });
 
         const html = this.renderStationsHtml(prefixes, all);
         await this.ensureVisHtmlObject();
         await this.setForeignStateAsync(id, { val: html, ack: true });
     }
+
 
     renderStationsHtml(prefixes, allStates) {
         const esc = (v) => (v === null || v === undefined) ? '' : String(v)
@@ -1523,6 +1603,41 @@ async cleanupObsoleteStations(currentPrefixes) {
   <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
     <div style="font-weight:800;font-size:16px;">⚡ ChargePoint</div>
     <div style="opacity:.75;font-size:12px;">Update: ${esc(updated)}</div>
+
+  ${(() => {
+      const nName  = getVal('nearestType2.name') ?? '';
+      const nAddr  = getVal('nearestType2.address') ?? '';
+      const nDistM = getVal('nearestType2.distance.m');
+      const nFree  = getVal('nearestType2.freePorts');
+      const nPorts = getVal('nearestType2.portCount');
+      const nErr   = getVal('nearestType2.lastError') ?? '';
+
+      const has = !!String(nName).trim();
+      const distTxt = (nDistM !== undefined && nDistM !== null && nDistM !== '') ? `${Math.round(Number(nDistM))} m` : '—';
+      const portsTxt = (nFree !== undefined && nPorts !== undefined && nFree !== null && nPorts !== null && nFree !== '' && nPorts !== '') ? `${nFree}/${nPorts} frei` : '—';
+
+      const statusKind = has ? ((Number(nFree) > 0) ? 'ok' : 'warn') : 'bad';
+      const statusText = has ? ((Number(nFree) > 0) ? 'Frei' : 'Belegt') : 'Keine Treffer';
+
+      const title = has ? esc(nName) : 'Keine Treffer';
+      const addr = has ? esc(nAddr) : esc(nErr || 'Keine Station im Umkreis gefunden');
+
+      return `
+  <div style="border:1px solid rgba(255,255,255,.12);border-radius:14px;padding:12px;margin-bottom:10px;background:rgba(0,0,0,.18);box-shadow:0 10px 24px rgba(0,0,0,.18);">
+    <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:10px;">
+      <div style="min-width:0;">
+        <div style="font-weight:900;font-size:13px;letter-spacing:.02em;opacity:.9;">🧭 Nächste freie Typ2</div>
+        <div style="margin-top:6px;font-size:14px;font-weight:900;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${title}</div>
+        <div style="opacity:.8;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${addr}</div>
+        <div style="margin-top:6px;display:flex;gap:8px;flex-wrap:wrap;">
+          ${badge(distTxt, 'neutral')}
+          ${badge(portsTxt, statusKind)}
+        </div>
+      </div>
+      <div style="flex:0 0 auto;">${badge(statusText, statusKind)}</div>
+    </div>
+  </div>`;
+  })()}
   </div>
   <div style="border:1px solid rgba(255,255,255,.12);border-radius:14px;overflow:hidden;background:rgba(0,0,0,.18);box-shadow:0 10px 24px rgba(0,0,0,.28);">
 `;
