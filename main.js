@@ -443,17 +443,9 @@ class CptAdapter extends utils.Adapter {
     }
 
     async initCarPosition() {
-        // static values from config have priority as initial values
-        if (typeof this.carLatStatic === 'number' && Number.isFinite(this.carLatStatic) &&
-            typeof this.carLonStatic === 'number' && Number.isFinite(this.carLonStatic)) {
-            this.carLat = this.carLatStatic;
-            this.carLon = this.carLonStatic;
-            await this.setStateAsync('car.lat', { val: this.carLat, ack: true });
-            await this.setStateAsync('car.lon', { val: this.carLon, ack: true });
-            await this.setStateAsync('car.source', { val: 'static', ack: true });
-            await this.setStateAsync('car.lastUpdate', { val: new Date().toISOString(), ack: true });
-            return;
-        }
+        // Prefer external state mapping if configured.
+        // Static values are only used as fallback (e.g. initial value) if no external IDs are set or they are invalid/unavailable.
+        const hasExternal = !!(this.carLatStateId || this.carLonStateId);
 
         // try to read foreign states (if configured)
         const lat = this.carLatStateId ? await this.getForeignStateAsync(this.carLatStateId).catch(() => null) : null;
@@ -471,22 +463,37 @@ class CptAdapter extends utils.Adapter {
             await this.setStateAsync('car.lon', { val: this.carLon, ack: true });
             await this.setStateAsync('car.source', { val: `${this.carLatStateId || ''} | ${this.carLonStateId || ''}`.trim(), ack: true });
             await this.setStateAsync('car.lastUpdate', { val: new Date().toISOString(), ack: true });
+            return;
         }
-    }
 
-    async updateCarPosition(lat, lon, source) {
-        const latN = parseNumberLocale(lat);
-        const lonN = parseNumberLocale(lon);
-        if (!Number.isFinite(latN) || !Number.isFinite(lonN)) return;
-        this.carLat = latN;
-        this.carLon = lonN;
-        await this.setStateAsync('car.lat', { val: this.carLat, ack: true });
-        await this.setStateAsync('car.lon', { val: this.carLon, ack: true });
-        await this.setStateAsync('car.source', { val: source || '', ack: true });
-        await this.setStateAsync('car.lastUpdate', { val: new Date().toISOString(), ack: true });
-        await this.updateDistancesForAllStations();
-        await this.handleCarContextChange('posChange');
-        this.scheduleNearestType2Update('carPosChange');
+        // static values from config as fallback
+        if (!hasExternal &&
+            typeof this.carLatStatic === 'number' && Number.isFinite(this.carLatStatic) &&
+            typeof this.carLonStatic === 'number' && Number.isFinite(this.carLonStatic)) {
+            this.carLat = this.carLatStatic;
+            this.carLon = this.carLonStatic;
+            await this.setStateAsync('car.lat', { val: this.carLat, ack: true });
+            await this.setStateAsync('car.lon', { val: this.carLon, ack: true });
+            await this.setStateAsync('car.source', { val: 'static', ack: true });
+            await this.setStateAsync('car.lastUpdate', { val: new Date().toISOString(), ack: true });
+            return;
+        }
+
+        // If external IDs are configured but invalid right now, fall back to static if available
+        if (hasExternal &&
+            typeof this.carLatStatic === 'number' && Number.isFinite(this.carLatStatic) &&
+            typeof this.carLonStatic === 'number' && Number.isFinite(this.carLonStatic)) {
+            this.carLat = this.carLatStatic;
+            this.carLon = this.carLonStatic;
+            await this.setStateAsync('car.lat', { val: this.carLat, ack: true });
+            await this.setStateAsync('car.lon', { val: this.carLon, ack: true });
+            await this.setStateAsync('car.source', { val: 'static_fallback', ack: true });
+            await this.setStateAsync('car.lastUpdate', { val: new Date().toISOString(), ack: true });
+            return;
+        }
+
+        // No valid position found
+        this.log.debug('Auto init: keine gültige Position (weder extern noch statisch)');
     }
 
     async initCarSoc() {
