@@ -1814,7 +1814,11 @@ async onReady() {
             })
             .filter((s) => !!s.deviceId1);
 
-        const enabledStations = stations.filter((s) => isTrue(s.enabled));
+        const enabledStations = stations.filter((s) => {
+            // Backward compatible default: if the flag was not present in older configs, treat as enabled
+            if (s.enabled === undefined || s.enabled === null || s.enabled === '') return true;
+            return isTrue(s.enabled);
+        });
 
         if (!enabledStations.length) {
             this.log.warn('Keine aktiven Stationen konfiguriert (enabled=false)');

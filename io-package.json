@@ -1,68 +1,68 @@
 {
-  "common": {
-    "name": "cpt",
-    "version": "0.6.31",
-    "title": "CPT ChargePoint",
-    "titleLang": {
-      "en": "CPT ChargePoint",
-      "de": "CPT ChargePoint"
+    "common": {
+        "name": "cpt",
+        "version": "0.6.32",
+        "title": "CPT ChargePoint",
+        "titleLang": {
+            "en": "CPT ChargePoint",
+            "de": "CPT ChargePoint"
+        },
+        "desc": {
+            "en": "Adapter for ChargePoint charging stations status",
+            "de": "Adapter für den Status von ChargePoint-Ladestationen"
+        },
+        "authors": [
+            "radebold <radebold@gmail.com>"
+        ],
+        "license": "MIT",
+        "platform": "Javascript/Node.js",
+        "mode": "daemon",
+        "icon": "cpt.png",
+        "type": "hardware",
+        "keywords": [
+            "chargepoint",
+            "ladestation",
+            "ev",
+            "evse",
+            "charging"
+        ],
+        "readme": "https://github.com/radebold/iobroker.cpt/blob/main/README.md",
+        "loglevel": "info",
+        "compact": true,
+        "connectionType": "cloud",
+        "dataSource": "poll",
+        "materialize": true,
+        "materializeTab": true,
+        "adminUI": {
+            "config": "json"
+        },
+        "messagebox": true
     },
-    "desc": {
-      "en": "Adapter for ChargePoint charging stations status",
-      "de": "Adapter für den Status von ChargePoint-Ladestationen"
+    "native": {
+        "interval": 5,
+        "stations": [],
+        "channels": [],
+        "subscriptions": [],
+        "visHtmlEnabled": true,
+        "visHtmlObjectId": "0_userdata.0.Vis.ChargePoint.htmlStations",
+        "visHtmlDebounceMs": 800,
+        "carLatStateId": "",
+        "carLonStateId": "",
+        "carSocStateId": "",
+        "carLat": "",
+        "carLon": "",
+        "notifySocBelow": 30,
+        "notifyMaxDistanceM": 500,
+        "visHtmlMobileObjectId": "0_userdata.0.Vis.ChargePoint.htmlStationsMobile",
+        "visHtmlMobileEnabled": true,
+        "notifyCooldownMin": 15,
+        "nearestType2Enabled": false,
+        "nearestRadiusM": 2000,
+        "nearestPageSize": 10
     },
-    "authors": [
-      "radebold <radebold@gmail.com>"
-    ],
-    "license": "MIT",
-    "platform": "Javascript/Node.js",
-    "mode": "daemon",
-    "icon": "cpt.png",
-    "type": "hardware",
-    "keywords": [
-      "chargepoint",
-      "ladestation",
-      "ev",
-      "evse",
-      "charging"
-    ],
-    "readme": "https://github.com/radebold/iobroker.cpt/blob/main/README.md",
-    "loglevel": "info",
-    "compact": true,
-    "connectionType": "cloud",
-    "dataSource": "poll",
-    "materialize": true,
-    "materializeTab": true,
-    "adminUI": {
-      "config": "json"
-    },
-    "messagebox": true
-  },
-  "native": {
-    "interval": 5,
-    "stations": [],
-    "channels": [],
-    "subscriptions": [],
-    "visHtmlEnabled": true,
-    "visHtmlObjectId": "0_userdata.0.Vis.ChargePoint.htmlStations",
-    "visHtmlDebounceMs": 800,
-    "carLatStateId": "",
-    "carLonStateId": "",
-    "carSocStateId": "",
-    "carLat": "",
-    "carLon": "",
-    "notifySocBelow": 30,
-    "notifyMaxDistanceM": 500,
-    "visHtmlMobileObjectId": "0_userdata.0.Vis.ChargePoint.htmlStationsMobile",
-    "visHtmlMobileEnabled": true,
-    "notifyCooldownMin": 15,
-    "nearestType2Enabled": false,
-    "nearestRadiusM": 2000,
-    "nearestPageSize": 10
-  },
-  "protectedNative": [],
-  "encryptedNative": [],
-  "objects": [],
-  "instanceObjects": [],
-  "version": "0.6.32"
+    "protectedNative": [],
+    "encryptedNative": [],
+    "objects": [],
+    "instanceObjects": [],
+    "version": "0.6.32"
 }

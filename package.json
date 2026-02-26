@@ -1,12 +1,12 @@
 {
-  "name": "iobroker.cpt",
-  "version": "0.6.32",
-  "description": "ioBroker adapter for ChargePoint charging stations status",
-  "main": "main.js",
-  "author": "radebold <radebold@gmail.com>",
-  "license": "MIT",
-  "dependencies": {
-    "@iobroker/adapter-core": "^3.2.3",
-    "axios": "^1.7.2"
-  }
+    "name": "iobroker.cpt",
+    "version": "0.6.32",
+    "description": "ioBroker adapter for ChargePoint charging stations status",
+    "main": "main.js",
+    "author": "radebold <radebold@gmail.com>",
+    "license": "MIT",
+    "dependencies": {
+        "@iobroker/adapter-core": "^3.2.3",
+        "axios": "^1.7.2"
+    }
 }
