@@ -1997,7 +1997,7 @@ async onReady() {
                 const isTelegram = instance.startsWith('telegram.');
                 const isWhatsAppCmb = instance.startsWith('whatsapp-cmb.');
                 const isOpenWa = instance.startsWith('open-wa.');
-                const isPushover = instance.startsWith('pushover.') || c.instance.startsWith('open-wa.');
+                const isPushover = instance.startsWith('pushover.');
 
                 if (isOpenWa && !user) {
                     obj.callback && this.sendTo(obj.from, obj.command, { error: 'Für open-wa muss im Feld Empfänger eine Telefonnummer stehen (z.B. +4917...)' }, obj.callback);
@@ -2026,7 +2026,9 @@ async onReady() {
                 }
                 Object.keys(payload).forEach((k) => payload[k] === undefined && delete payload[k]);
 
-                this.sendTo(instance, 'send', payload);
+                // open-wa uses a dedicated command; others usually accept the payload directly
+                if (isOpenWa) this.sendTo(instance, 'send', payload);
+                else this.sendTo(instance, payload);
                 obj.callback && this.sendTo(obj.from, obj.command, { data: { result: `Test an ${instance} gesendet${user ? ' (' + user + ')' : ''}` } }, obj.callback);
             } catch (e) {
                 obj.callback && this.sendTo(obj.from, obj.command, { error: e.message }, obj.callback);
