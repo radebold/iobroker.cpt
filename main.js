@@ -650,7 +650,7 @@ class CptAdapter extends utils.Adapter {
                 // Compute distance locally (the API sometimes omits `distance`).
                 let best = null;
                 let bestM = Infinity;
-                for (const st of enabledStations) {
+                for (const st of stations) {
                     const stLat = parseNumberLocale(st?.lat ?? st?.latitude);
                     const stLon = parseNumberLocale(st?.lon ?? st?.longitude);
                     if (!Number.isFinite(stLat) || !Number.isFinite(stLon)) continue;
@@ -1011,7 +1011,7 @@ class CptAdapter extends utils.Adapter {
 
     async updateAllStations(stations) {
         const currentPrefixes = new Set();
-        for (const st of enabledStations) {
+        for (const st of stations) {
             const data1 = await this.safeFetch(st.deviceId1);
             const data2 = st.deviceId2 ? await this.safeFetch(st.deviceId2) : null;
 
