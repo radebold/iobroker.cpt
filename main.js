@@ -767,19 +767,6 @@ class CptAdapter extends utils.Adapter {
         }
     }
 
-
-            await this.updateStateIfChanged("car.lat", latNum);
-            await this.updateStateIfChanged("car.lon", lonNum);
-            await this.updateStateIfChanged("car.source", source || "");
-            await this.setStateAsync("car.lastUpdate", { val: new Date().toISOString(), ack: true });
-
-            this.scheduleCarDistanceUpdate("carPosChange");
-            this.scheduleNearestType2Update("carPosChange");
-        } catch (e) {
-            this.log.warn("updateCarPosition Fehler: " + (e && e.message ? e.message : e));
-        }
-    }
-
     async passesNotifyFilters(stationPrefixRel) {
         const res = { ok: true, socOk: true, distanceOk: true, soc: this.carSoc, distanceM: null };
 
