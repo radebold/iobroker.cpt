@@ -171,10 +171,11 @@
                 "de": "Test senden",
                 "en": "Send test"
               },
-              "data": {
-                "instance": "${data.instance}",
-                "user": "${data.user}",
-                "label": "${data.label}"
+              "attr": "_test",
+              "jsonData": "{\"instance\":\"${data.instance}\",\"user\":\"${data.user}\",\"label\":\"${data.label}\"}",
+              "title": {
+                "de": "Test",
+                "en": "Test"
               }
             }
           ]

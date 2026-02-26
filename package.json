@@ -1,6 +1,6 @@
 {
   "name": "iobroker.cpt",
-  "version": "0.6.31",
+  "version": "0.6.32",
   "description": "ioBroker adapter for ChargePoint charging stations status",
   "main": "main.js",
   "author": "radebold <radebold@gmail.com>",

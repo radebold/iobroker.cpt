@@ -1984,9 +1984,11 @@ async onReady() {
         }
 
         if (obj.command === 'testChannel') {
-            const instance = (obj.message?.instance || '').toString().trim();
-            const user = (obj.message?.user || '').toString().trim();
-            const label = (obj.message?.label || '').toString().trim();
+            const msg = (obj.message && typeof obj.message === 'object') ? obj.message : {};
+            const m = (msg.data && typeof msg.data === 'object') ? msg.data : msg;
+            const instance = (m.instance || '').toString().trim();
+            const user = (m.user || '').toString().trim();
+            const label = (m.label || '').toString().trim();
 
             if (!instance) {
                 obj.callback && this.sendTo(obj.from, obj.command, { error: 'Kein Adapter-Instanz gesetzt' }, obj.callback);
