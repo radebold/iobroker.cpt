@@ -1381,15 +1381,24 @@ async cleanupObsoleteStations(currentPrefixes) {
 
         const prefixesAll = Object.keys(stationStates || {})
             .filter((k) => k.endsWith('.name') && stationStates[k] && stationStates[k].val !== undefined)
-            .map((k) => k.replace(this.namespace + '.', '').replace(/\.name$/, ''))
-            .sort((a, b) => a.localeCompare(b));
+            .map((k) => k.replace(this.namespace + '.', '').replace(/\.name$/, ''));
 
         // Only show active AND valid stations in VIS (enabled in config)
-        const prefixes = prefixesAll.filter((p) => {
+        const prefixesFiltered = prefixesAll.filter((p) => {
             const en = stationStates[this.namespace + '.' + p + '.enabled']?.val === true;
             const valid = stationStates[this.namespace + '.' + p + '.valid']?.val !== false;
             const city = stationStates[this.namespace + '.' + p + '.city']?.val;
             return en && valid && city && String(city) !== 'Unbekannt';
+        });
+
+        // Sort by current distance (dynamic, based on car position). Stations without distance go to the end.
+        const prefixes = prefixesFiltered.sort((a, b) => {
+            const da = stationStates[this.namespace + '.' + a + '.distance.m']?.val;
+            const db = stationStates[this.namespace + '.' + b + '.distance.m']?.val;
+            const na = (da === null || da === undefined || da === '' || Number.isNaN(Number(da))) ? Number.POSITIVE_INFINITY : Number(da);
+            const nb = (db === null || db === undefined || db === '' || Number.isNaN(Number(db))) ? Number.POSITIVE_INFINITY : Number(db);
+            if (na !== nb) return na - nb;
+            return a.localeCompare(b);
         });
 
         const html = this.renderStationsHtmlMobile(prefixes, all);
@@ -1580,15 +1589,24 @@ async cleanupObsoleteStations(currentPrefixes) {
 
         const prefixesAll = Object.keys(stationStates || {})
             .filter((k) => k.endsWith('.name') && stationStates[k] && stationStates[k].val !== undefined)
-            .map((k) => k.replace(this.namespace + '.', '').replace(/\.name$/, ''))
-            .sort((a, b) => a.localeCompare(b));
+            .map((k) => k.replace(this.namespace + '.', '').replace(/\.name$/, ''));
 
         // Only show active AND valid stations in VIS
-        const prefixes = prefixesAll.filter((p) => {
+        const prefixesFiltered = prefixesAll.filter((p) => {
             const en = stationStates[this.namespace + '.' + p + '.enabled']?.val === true;
             const valid = stationStates[this.namespace + '.' + p + '.valid']?.val !== false; // default true
             const city = stationStates[this.namespace + '.' + p + '.city']?.val;
             return en && valid && city && String(city) !== 'Unbekannt';
+        });
+
+        // Sort by current distance (dynamic, based on car position). Stations without distance go to the end.
+        const prefixes = prefixesFiltered.sort((a, b) => {
+            const da = stationStates[this.namespace + '.' + a + '.distance.m']?.val;
+            const db = stationStates[this.namespace + '.' + b + '.distance.m']?.val;
+            const na = (da === null || da === undefined || da === '' || Number.isNaN(Number(da))) ? Number.POSITIVE_INFINITY : Number(da);
+            const nb = (db === null || db === undefined || db === '' || Number.isNaN(Number(db))) ? Number.POSITIVE_INFINITY : Number(db);
+            if (na !== nb) return na - nb;
+            return a.localeCompare(b);
         });
 
         const html = this.renderStationsHtml(prefixes, all);
