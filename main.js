@@ -2005,32 +2005,39 @@ async onReady() {
                 }
 
                 let payload;
+                const msgText = 'CPT Test: Kommunikation OK ✅';
                 if (isTelegram) {
-                    payload = { text: 'CPT Test: Kommunikation OK ✅', ...(user ? { user } : {}) };
+                    payload = { text: msgText, ...(user ? { user } : {}) };
                 } else if (isWhatsAppCmb) {
                     payload = {
                         phone: user || undefined,
                         number: user || undefined,
                         to: user || undefined,
-                        text: 'CPT Test: Kommunikation OK ✅',
-                        message: 'CPT Test: Kommunikation OK ✅',
+                        text: msgText,
+                        message: msgText,
                         title: 'ChargePoint',
                         channelLabel: label || undefined,
                     };
                 } else if (isPushover) {
-                    payload = { message: 'CPT Test: Kommunikation OK ✅', sound: '' };
+                    payload = { message: msgText, sound: '' };
                 } else if (isOpenWa) {
-                    payload = { to: user, text: 'CPT Test: Kommunikation OK ✅' };
+                    payload = { to: user, text: msgText };
                 } else {
-                    payload = { text: 'CPT Test: Kommunikation OK ✅' };
+                    payload = { text: msgText };
                 }
                 Object.keys(payload).forEach((k) => payload[k] === undefined && delete payload[k]);
+
+                // IMPORTANT: log this action because sendTo itself is fire-and-forget
+                this.log.info(`Kommunikation-Test: instance=${instance}${user ? ` user=${user}` : ''}${label ? ` label=${label}` : ''}`);
 
                 // open-wa uses a dedicated command; others usually accept the payload directly
                 if (isOpenWa) this.sendTo(instance, 'send', payload);
                 else this.sendTo(instance, payload);
+
+                this.log.info(`Kommunikation-Test: sendTo ausgelöst (${instance})`);
                 obj.callback && this.sendTo(obj.from, obj.command, { data: { result: `Test an ${instance} gesendet${user ? ' (' + user + ')' : ''}` } }, obj.callback);
             } catch (e) {
+                this.log.warn(`Kommunikation-Test fehlgeschlagen (${instance}): ${e.message}`);
                 obj.callback && this.sendTo(obj.from, obj.command, { error: e.message }, obj.callback);
             }
             return;
