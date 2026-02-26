@@ -1646,10 +1646,28 @@ async cleanupObsoleteStations(currentPrefixes) {
             return 'neutral';
         };
 
-        const getVal = (relId) => {
+        const getState = (relId) => {
             const full = this.namespace + '.' + relId;
-            const st = allStates[full];
+            return allStates[full];
+        };
+
+        const getVal = (relId) => {
+            const st = getState(relId);
             return st ? st.val : undefined;
+        };
+
+        // Human readable "age" from a timestamp (ms).
+        // - show minutes for <= 100 minutes
+        // - show hours for > 100 minutes
+        const ageText = (tsMs) => {
+            if (!tsMs || Number.isNaN(Number(tsMs))) return '—';
+            const diffMin = Math.max(0, Math.floor((Date.now() - Number(tsMs)) / 60000));
+            if (diffMin > 100) {
+                const h = diffMin / 60;
+                const hTxt = h < 10 ? h.toFixed(1) : String(Math.round(h));
+                return `${hTxt} h`;
+            }
+            return `${diffMin} min`;
         };
 
         const updated = new Date().toLocaleString('de-DE');
@@ -1710,6 +1728,7 @@ async cleanupObsoleteStations(currentPrefixes) {
         <th style="text-align:left;padding:10px;font-size:12px;letter-spacing:.04em;opacity:.85;">STATUS</th>
         <th style="text-align:left;padding:10px;font-size:12px;letter-spacing:.04em;opacity:.85;">PORTS</th>
         <th style="text-align:left;padding:10px;font-size:12px;letter-spacing:.04em;opacity:.85;">DISTANZ</th>
+        <th style="text-align:left;padding:10px;font-size:12px;letter-spacing:.04em;opacity:.85;">ALTER</th>
         <th style="text-align:left;padding:10px;font-size:12px;letter-spacing:.04em;opacity:.85;">GPS</th>
       </tr>
 `;
@@ -1727,6 +1746,7 @@ async cleanupObsoleteStations(currentPrefixes) {
 
             const portBadges = [];
             const prefixFull = this.namespace + '.' + p + '.ports.';
+            let newestPortTs = 0;
             for (const key of Object.keys(allStates)) {
                 if (!key.startsWith(prefixFull) || !key.endsWith('.statusV2')) continue;
                 const m = key.match(/\.ports\.(\d+)\.statusV2$/);
@@ -1737,6 +1757,11 @@ async cleanupObsoleteStations(currentPrefixes) {
                 const s = (s2 ?? s1);
                 if (s === undefined) continue;
                 portBadges.push({ n: Number(n), html: badge(`P${n}: ${s}`, kindFromPort(s)) });
+
+                // track newest timestamp across port statusV2 states
+                const stObj = allStates[key];
+                const ts = stObj ? (stObj.lc || stObj.ts) : 0;
+                if (ts && ts > newestPortTs) newestPortTs = ts;
             }
             portBadges.sort((a, b) => a.n - b.n);
             const portText = portBadges.length ? portBadges.map(x => x.html).join(' ') : `<span style="opacity:.75;">—</span>`;
@@ -1754,6 +1779,14 @@ async cleanupObsoleteStations(currentPrefixes) {
                 ? badge(`${dKm} km`, 'neutral')
                 : `<span style="opacity:.75;">—</span>`;
 
+            // Age: prefer latest port status timestamp; fallback to derived status timestamp
+            let ageTs = newestPortTs;
+            if (!ageTs) {
+                const stObj = getState(p + '.statusDerived');
+                ageTs = stObj ? (stObj.lc || stObj.ts) : 0;
+            }
+            const ageBadge = badge(`vor ${ageText(ageTs)}`, 'neutral');
+
             out += `
       <tr style="border-top:1px solid rgba(255,255,255,.08)">
         <td style="padding:10px;vertical-align:top;">${esc(city)}</td>
@@ -1761,6 +1794,7 @@ async cleanupObsoleteStations(currentPrefixes) {
         <td style="padding:10px;vertical-align:top;">${badge(st || '—', kindFromStatus(st))}</td>
         <td style="padding:10px;vertical-align:top;">${portsSummary}<div style="margin-top:6px;line-height:1.8;">${portText}</div></td>
         <td style="padding:10px;vertical-align:top;">${distText}</td>
+        <td style="padding:10px;vertical-align:top;">${ageBadge}</td>
         <td style="padding:10px;vertical-align:top;">${gpsText}</td>
       </tr>
 `;

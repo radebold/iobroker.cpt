@@ -1,7 +1,7 @@
 {
     "common": {
         "name": "cpt",
-  "version": "0.6.33",
+  "version": "0.6.34",
         "title": "CPT ChargePoint",
         "titleLang": {
             "en": "CPT ChargePoint",
