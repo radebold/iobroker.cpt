@@ -68,7 +68,11 @@ class CptAdapter extends utils.Adapter {
             : 15;
 
         // per-station notify memory to avoid duplicates
-        this.notifyMetaByStation = {}; // { [stationPrefixRel]: { inRange:boolean, notified:boolean, lastSent:number } }
+        // notifiedPosKey: last car position key (rounded) for which we already notified while station was free
+        this.notifyMetaByStation = {}; // { [stationPrefixRel]: { notifiedPosKey:string|null, lastSent:number } }
+
+        // per-port status cache (to detect transitions to "available")
+        this.lastPortStatusByKey = {}; // { ["stations.<city>.<station>|<outlet>"]: "available"|... }
         this.stationPrefixes = [];
 
         // remember which incomplete stations were already warned (avoid log spam)
@@ -316,10 +320,8 @@ class CptAdapter extends utils.Adapter {
             return st === String(stationPrefixRel);
         });
 
-        // If no subscriptions exist, fall back to “all active channels” (keeps old behaviour)
-        if (!matches.length) {
-            return this.sendAvailableNotification({ isTest, station: stationName, city, freePorts, portCount });
-        }
+        // If nothing matches, do nothing (subscriptions define recipients)
+        if (!matches.length) return { ok: 0, failed: 0, note: 'no_subscriptions' };
 
         for (const s of matches) {
             const recipientLabel = (s.recipient || '').toString().trim();
@@ -748,7 +750,9 @@ class CptAdapter extends utils.Adapter {
                 return;
             }
 
-            const changed = (!Number.isFinite(this.carLat) || !Number.isFinite(this.carLon) || this.carLat !== latNum || this.carLon !== lonNum);
+            const prevLat = this.carLat;
+            const prevLon = this.carLon;
+            const changed = (!Number.isFinite(prevLat) || !Number.isFinite(prevLon) || prevLat !== latNum || prevLon !== lonNum);
             this.carLat = latNum;
             this.carLon = lonNum;
 
@@ -759,8 +763,14 @@ class CptAdapter extends utils.Adapter {
 
             // Only (re)calculate when the position actually changed
             if (changed) {
+                // Update distances immediately so notify filters have fresh values
+                await this.updateDistancesForAllStations();
+
                 this.scheduleCarDistanceUpdate('carPosChange');
                 this.scheduleNearestType2Update('carPosChange');
+
+                // Allow notifications again when the position (grid) changed
+                await this.handleCarContextChange('carPosChange');
             }
         } catch (e) {
             this.log.warn('updateCarPosition Fehler: ' + (e && e.message ? e.message : e));
@@ -801,9 +811,17 @@ class CptAdapter extends utils.Adapter {
 
     getNotifyMeta(stationPrefixRel) {
         if (!this.notifyMetaByStation[stationPrefixRel]) {
-            this.notifyMetaByStation[stationPrefixRel] = { inRange: false, notified: false, lastSent: 0 };
+            this.notifyMetaByStation[stationPrefixRel] = { notifiedPosKey: null, lastSent: 0 };
         }
         return this.notifyMetaByStation[stationPrefixRel];
+    }
+
+    getCarPosKey() {
+        // Round to 3 decimals (~111m) to avoid jitter-related spam
+        if (!Number.isFinite(this.carLat) || !Number.isFinite(this.carLon)) return null;
+        const lat = Math.round(this.carLat * 1000) / 1000;
+        const lon = Math.round(this.carLon * 1000) / 1000;
+        return `${lat.toFixed(3)}:${lon.toFixed(3)}`;
     }
 
     getExitDistanceM() {
@@ -855,27 +873,27 @@ class CptAdapter extends utils.Adapter {
     async attemptNotifyForStation({ stationPrefixRel, city, stationName, freePorts, portCount, reason }) {
         const meta = this.getNotifyMeta(stationPrefixRel);
 
+        const posKey = this.getCarPosKey();
+
         // Reset notified when station is not free anymore
         if (!(Number(freePorts) > 0)) {
-            meta.notified = false;
+            meta.notifiedPosKey = null;
             return;
         }
 
-        // Only one notification per "free phase"
-        if (meta.notified) return;
+        // Require a stable car position (needed for distance filter + "notify again only after position changed")
+        if (!posKey) return;
 
-        // Cooldown (per station)
-        const cdMin = Number(this.notifyCooldownMin) || 0;
-        if (cdMin > 0 && meta.lastSent && Date.now() - meta.lastSent < cdMin * 60 * 1000) {
-            return;
-        }
+        // Only one notification per free phase AND car position key
+        if (meta.notifiedPosKey && meta.notifiedPosKey === posKey) return;
 
         // Station toggle OR subscriptions decide whether station is relevant
         const notifyState = await this.getStateAsync(`${stationPrefixRel}.notifyOnAvailable`).catch(() => null);
         const notifyEnabled = notifyState?.val === true;
         const hasSubs = this.stationHasNotifyTarget(stationPrefixRel, stationName);
 
-        if (!notifyEnabled && !hasSubs) return;
+        // New rule: Station must have Notify enabled AND there must be at least one matching subscription
+        if (!notifyEnabled || !hasSubs) return;
 
         // Filters: SoC + distance must be determinable and pass
         const f = await this.passesNotifyFilters(stationPrefixRel);
@@ -888,7 +906,7 @@ class CptAdapter extends utils.Adapter {
         }
 
         await this.notifySubscribers({ stationPrefixRel, city, stationName, freePorts, portCount, isTest: false });
-        meta.notified = true;
+        meta.notifiedPosKey = posKey;
         meta.lastSent = Date.now();
         this.log.info(`Notify (${reason}): ${stationName} (${city}) freePorts=${freePorts}/${portCount} (SoC=${f.soc ?? 'n/a'}%, dist=${f.distanceM ?? 'n/a'}m)`);
     }
@@ -1073,7 +1091,7 @@ class CptAdapter extends utils.Adapter {
             }
 
 
-            const prevFree = this.lastFreePortsByStation[stationPrefix];
+            let anyPortBecameAvailable = false;
 
             await this.updateStateIfChanged(`${stationPrefix}.portCount`, portCount);
             await this.updateStateIfChanged(`${stationPrefix}.freePorts`, freePorts);
@@ -1086,6 +1104,15 @@ class CptAdapter extends utils.Adapter {
                 const port = ports[i] || {};
                 const outletNumber = port.outletNumber ?? i + 1;
                 const portPrefix = await this.ensurePortObjects(stationPrefix, outletNumber);
+
+                // detect transition to "available" per port (for notifications)
+                const curStatusNorm = this.normalizeStatus(port?.statusV2 || port?.status);
+                const cacheKey = `${stationPrefix}|${outletNumber}`;
+                const prevStatusNorm = this.lastPortStatusByKey[cacheKey];
+                if (prevStatusNorm !== undefined && prevStatusNorm !== 'available' && curStatusNorm === 'available') {
+                    anyPortBecameAvailable = true;
+                }
+                this.lastPortStatusByKey[cacheKey] = curStatusNorm;
 
                 const connector0 = Array.isArray(port.connectorList) && port.connectorList.length ? port.connectorList[0] : null;
                 const displayPlugType = connector0?.displayPlugType ? String(connector0.displayPlugType) : '';
@@ -1102,28 +1129,17 @@ class CptAdapter extends utils.Adapter {
                 await this.setStateAsync(`${portPrefix}.lastUpdate`, { val: new Date().toISOString(), ack: true });
             }
 
-            // notify logic:
-            // 1) station becomes free (0 -> >0) and car is already in range with low SoC
-            // 2) car enters range / SoC drops is handled on car state changes
-            const meta = this.getNotifyMeta(stationPrefix);
-
-            // reset notification when station is not free anymore
-            if (!(Number(freePorts) > 0)) {
-                meta.notified = false;
-            }
-
-            if (prevFree !== undefined && Number(prevFree) === 0 && Number(freePorts) > 0) {
+            // notify logic: when any port transitions to "available"
+            if (anyPortBecameAvailable) {
                 await this.attemptNotifyForStation({
                     stationPrefixRel: stationPrefix,
                     city,
                     stationName: st.name,
                     freePorts,
                     portCount,
-                    reason: 'stationFree',
+                    reason: 'portAvailable',
                 });
             }
-
-            this.lastFreePortsByStation[stationPrefix] = freePorts;
 
             this.scheduleVisHtmlUpdate('state change');
 
@@ -1237,29 +1253,15 @@ async cleanupObsoleteStations(currentPrefixes) {
         try {
             if (!Array.isArray(this.stationPrefixes) || !this.stationPrefixes.length) return;
 
-            // Only proceed if we have a valid SoC (mandatory)
-            if (typeof this.carSoc !== 'number' || !Number.isFinite(this.carSoc)) return;
-
             for (const prefix of this.stationPrefixes) {
-                // station must currently be free
                 const freeSt = await this.getStateAsync(`${prefix}.freePorts`).catch(() => null);
                 const freePorts = freeSt?.val !== undefined ? Number(freeSt.val) : NaN;
                 if (!Number.isFinite(freePorts) || freePorts <= 0) {
-                    // reset notified when not free (so next free cycle can notify)
-                    this.getNotifyMeta(prefix).notified = false;
+                    // clear notify memory when station is not free
+                    this.getNotifyMeta(prefix).notifiedPosKey = null;
                     continue;
                 }
 
-                // compute in-range transition
-                const range = await this.computeInRange(prefix);
-                const meta = this.getNotifyMeta(prefix);
-
-                // If we just entered, or SoC got low while already inside range, try notify
-                const shouldTry = range.entered || (range.now && reason === 'socChange');
-
-                if (!shouldTry) continue;
-
-                // Need station context
                 const info = this.stationInfoByPrefix[prefix] || {};
                 const portCountSt = await this.getStateAsync(`${prefix}.portCount`).catch(() => null);
                 const portCount = portCountSt?.val !== undefined ? Number(portCountSt.val) : undefined;
@@ -1270,13 +1272,8 @@ async cleanupObsoleteStations(currentPrefixes) {
                     stationName: info.name || prefix.split('.').pop(),
                     freePorts,
                     portCount,
-                    reason: range.entered ? 'carEntered' : 'socBelow',
+                    reason,
                 });
-
-                // If we left range, we do NOT reset meta.notified (one notify per free-phase)
-                if (range.exited) {
-                    meta.inRange = false;
-                }
             }
         } catch (e) {
             this.log.debug(`handleCarContextChange failed: ${e.message}`);
