@@ -30,6 +30,8 @@ class CptAdapter extends utils.Adapter {
 
         this.visHtmlTimer = null;
         this.nearestTimer = null;
+        this.carDistanceTimer = null;
+        this.carDistanceDebounceMs = 1200;
         this.nearestDebounceMs = 1500;
         this.visHtmlObjectId = (this.config && this.config.visHtmlObjectId) || '0_userdata.0.Vis.ChargePoint.htmlStations';
         this.visHtmlEnabled = (this.config && this.config.visHtmlEnabled !== undefined) ? isTrue(this.config.visHtmlEnabled) : true;
@@ -738,13 +740,33 @@ class CptAdapter extends utils.Adapter {
 
     async updateCarPosition(lat, lon, source) {
         try {
-            const latNum = typeof lat === "string" ? Number(String(lat).replace(",", ".")) : Number(lat);
-            const lonNum = typeof lon === "string" ? Number(String(lon).replace(",", ".")) : Number(lon);
+            const latNum = parseNumberLocale(lat);
+            const lonNum = parseNumberLocale(lon);
 
             if (!Number.isFinite(latNum) || !Number.isFinite(lonNum)) {
-                this.log.debug("Auto pos: invalid lat/lon");
+                this.log.debug('Auto pos: invalid lat/lon');
                 return;
             }
+
+            const changed = (!Number.isFinite(this.carLat) || !Number.isFinite(this.carLon) || this.carLat !== latNum || this.carLon !== lonNum);
+            this.carLat = latNum;
+            this.carLon = lonNum;
+
+            await this.updateStateIfChanged('car.lat', latNum);
+            await this.updateStateIfChanged('car.lon', lonNum);
+            await this.updateStateIfChanged('car.source', source || '');
+            await this.setStateAsync('car.lastUpdate', { val: new Date().toISOString(), ack: true });
+
+            // Only (re)calculate when the position actually changed
+            if (changed) {
+                this.scheduleCarDistanceUpdate('carPosChange');
+                this.scheduleNearestType2Update('carPosChange');
+            }
+        } catch (e) {
+            this.log.warn('updateCarPosition Fehler: ' + (e && e.message ? e.message : e));
+        }
+    }
+
 
             await this.updateStateIfChanged("car.lat", latNum);
             await this.updateStateIfChanged("car.lon", lonNum);
@@ -1292,6 +1314,17 @@ async cleanupObsoleteStations(currentPrefixes) {
         if (reason) this.log.debug(`VIS HTML Update geplant: ${reason}`);
     }
 
+    scheduleCarDistanceUpdate(reason = '') {
+        if (!Number.isFinite(this.carLat) || !Number.isFinite(this.carLon)) return;
+        if (this.carDistanceTimer) clearTimeout(this.carDistanceTimer);
+        this.carDistanceTimer = setTimeout(() => {
+            this.updateDistancesForAllStations()
+                .then(() => this.handleCarContextChange('carPosChange'))
+                .catch((e) => this.log.debug(`updateDistancesForAllStations fehlgeschlagen: ${e.message}`));
+        }, this.carDistanceDebounceMs);
+        if (reason) this.log.debug(`Car distance update geplant: ${reason}`);
+    }
+
     scheduleNearestType2Update(reason = '') {
         if (!isTrue(this.config.nearestType2Enabled)) return;
         if (!Number.isFinite(this.carLat) || !Number.isFinite(this.carLon)) return;
@@ -1767,6 +1800,8 @@ async onReady() {
         // initialize car position (static or from foreign)
         await this.initCarPosition();
         await this.initCarSoc();
+        // initial distance calc + nearest station (if car GPS is known)
+        this.scheduleCarDistanceUpdate('initial');
         this.scheduleNearestType2Update('initial');
 
         this.subscribeStates('tools.export');
