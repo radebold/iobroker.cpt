@@ -650,7 +650,7 @@ class CptAdapter extends utils.Adapter {
                 // Compute distance locally (the API sometimes omits `distance`).
                 let best = null;
                 let bestM = Infinity;
-                for (const st of stations) {
+                for (const st of enabledStations) {
                     const stLat = parseNumberLocale(st?.lat ?? st?.latitude);
                     const stLon = parseNumberLocale(st?.lon ?? st?.longitude);
                     if (!Number.isFinite(stLat) || !Number.isFinite(stLon)) continue;
@@ -1011,7 +1011,7 @@ class CptAdapter extends utils.Adapter {
 
     async updateAllStations(stations) {
         const currentPrefixes = new Set();
-        for (const st of stations) {
+        for (const st of enabledStations) {
             const data1 = await this.safeFetch(st.deviceId1);
             const data2 = st.deviceId2 ? await this.safeFetch(st.deviceId2) : null;
 
@@ -1805,7 +1805,8 @@ async onReady() {
                 const deviceId1 = s.deviceId1 ?? s.stationId ?? s.deviceId ?? s.id;
                 const deviceId2 = s.deviceId2 ?? null;
                 const name = s.name || `station_${deviceId1 || idx + 1}`;
-                const enabled = s.enabled !== false;
+                // Enabled can be boolean/number/string from admin JSON config
+                const enabled = (s.enabled == undefined || s.enabled == null) ? true : isTrue(s.enabled);
                 return {
                     name,
                     enabled,
@@ -1816,13 +1817,20 @@ async onReady() {
             })
             .filter((s) => !!s.deviceId1);
 
+        const enabledStations = stations.filter((s) => isTrue(s.enabled));
+
+        if (!enabledStations.length) {
+            this.log.warn('Keine aktiven Stationen konfiguriert (enabled=false)');
+            return;
+        }
+
         if (!stations.length) {
             this.log.warn('Keine gültigen Stationen konfiguriert');
             return;
         }
 
         // create tree based on current city names
-        for (const st of stations) {
+        for (const st of enabledStations) {
             const data1 = await this.safeFetch(st.deviceId1);
             const data2 = st.deviceId2 ? await this.safeFetch(st.deviceId2) : null;
             const city = this.pickCity(data1, data2);
@@ -1834,16 +1842,16 @@ async onReady() {
             await this.ensureStationObjects(stationPrefix, st, city);
         }
 
-        await this.updateAllStations(stations);
+        await this.updateAllStations(enabledStations);
 
         // initial VIS HTML write
         this.scheduleVisHtmlUpdate('initial');
 
         this.pollInterval = setInterval(() => {
-            this.updateAllStations(stations).catch((e) => this.log.error(`Polling-Fehler: ${e?.message || e}`));
+            this.updateAllStations(enabledStations).catch((e) => this.log.error(`Polling-Fehler: ${e?.message || e}`));
         }, intervalMin * 60 * 1000);
 
-        this.log.info(`Polling-Intervall: ${intervalMin} Minuten, Stationen: ${stations.length}`);
+        this.log.info(`Polling-Intervall: ${intervalMin} Minuten, Stationen (aktiv): ${enabledStations.length}`);
     }
 
     async onStateChange(id, state) {
@@ -2076,7 +2084,7 @@ async onReady() {
         const stations = (Array.isArray(this.config.stations) ? this.config.stations : [])
             .filter((s) => s && typeof s === 'object')
             .map((s, idx) => ({
-                enabled: s.enabled !== false,
+                enabled: (s.enabled == undefined || s.enabled == null) ? true : isTrue(s.enabled),
                 notifyOnAvailable: s.notifyOnAvailable === true,
                 name: s.name || `station_${s.deviceId1 ?? s.stationId ?? s.deviceId ?? idx + 1}`,
                 deviceId1: Number(s.deviceId1 ?? s.stationId ?? s.deviceId ?? s.id),
