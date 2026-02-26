@@ -208,8 +208,8 @@ class CptAdapter extends utils.Adapter {
                 label: c.label !== undefined && c.label !== null ? String(c.label).trim() : '',
             }))
             .filter((c) => {
-                const ok = c.instance.startsWith('telegram.') || c.instance.startsWith('whatsapp-cmb.') || c.instance.startsWith('pushover.');
-                if (!ok) this.log.warn(`Kommunikations-Instanz wird ignoriert (nicht erlaubt): ${c.instance}`);
+                const ok = c.instance.startsWith('telegram.') || c.instance.startsWith('whatsapp-cmb.') || c.instance.startsWith('pushover.') || c.instance.startsWith('open-wa.');
+                if (!ok) this.log.debug('Kommunikations-Instanz ignoriert: ' + c.instance);
                 return ok;
             });
 
@@ -269,9 +269,7 @@ class CptAdapter extends utils.Adapter {
                 };
             } else if (isOpenWa) {
                 payload = { to: u || undefined, text };
-            } else if (isOpenWa) {
-                    payload = { to: user || undefined, text: 'CPT Test: Kommunikation OK ✅' };
-                } else if (isPushover) {
+            } else if (isPushover) {
                 payload = { message: text, sound: '' };
             } else {
                 payload = { text };
@@ -736,6 +734,28 @@ class CptAdapter extends utils.Adapter {
         }
         await this.setStateAsync('car.lastUpdate', { val: new Date().toISOString(), ack: true });
         await this.handleCarContextChange('socChange');
+    }
+
+    async updateCarPosition(lat, lon, source) {
+        try {
+            const latNum = typeof lat === "string" ? Number(String(lat).replace(",", ".")) : Number(lat);
+            const lonNum = typeof lon === "string" ? Number(String(lon).replace(",", ".")) : Number(lon);
+
+            if (!Number.isFinite(latNum) || !Number.isFinite(lonNum)) {
+                this.log.debug("Auto pos: invalid lat/lon");
+                return;
+            }
+
+            await this.updateStateIfChanged("car.lat", latNum);
+            await this.updateStateIfChanged("car.lon", lonNum);
+            await this.updateStateIfChanged("car.source", source || "");
+            await this.setStateAsync("car.lastUpdate", { val: new Date().toISOString(), ack: true });
+
+            this.scheduleCarDistanceUpdate("carPosChange");
+            this.scheduleNearestType2Update("carPosChange");
+        } catch (e) {
+            this.log.warn("updateCarPosition Fehler: " + (e && e.message ? e.message : e));
+        }
     }
 
     async passesNotifyFilters(stationPrefixRel) {
@@ -1955,7 +1975,7 @@ async onReady() {
                 const isTelegram = instance.startsWith('telegram.');
                 const isWhatsAppCmb = instance.startsWith('whatsapp-cmb.');
                 const isOpenWa = instance.startsWith('open-wa.');
-                const isPushover = instance.startsWith('pushover.');
+                const isPushover = instance.startsWith('pushover.') || c.instance.startsWith('open-wa.');
 
                 if (isOpenWa && !user) {
                     obj.callback && this.sendTo(obj.from, obj.command, { error: 'Für open-wa muss im Feld Empfänger eine Telefonnummer stehen (z.B. +4917...)' }, obj.callback);
