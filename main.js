@@ -2025,27 +2025,13 @@ async onReady() {
                 // Prefer configured & enabled stations (works before first poll)
                 const configured = Array.isArray(this.config.stations) ? this.config.stations : [];
                 for (const s of configured) {
-                    if (!s || !isTrue(s.enabled)) continue;
+                    if (!s) continue;
                     const n = s.name ? String(s.name).trim() : '';
                     if (!n) continue;
                     const val = `name:${n}`;
-                    if (!opts.some((o) => o.value === val)) opts.push({ value: val, label: n });
-                }
-
-                // Also include already created station objects (for stable selection by prefix)
-                const list = await this.getStatesAsync(this.namespace + '.stations.*.*.name');
-                for (const [id, st] of Object.entries(list || {})) {
-                    const rel = id.replace(this.namespace + '.', '').replace(/\.name$/, '');
-                    const parts = rel.split('.');
-                    const city = parts.length >= 3 ? parts[1] : '';
-                    const stationName = st?.val ? String(st.val) : parts[2];
-                    // Filter to enabled stations if we can match by name
-                    if (configured.length) {
-                        const match = configured.find((x) => x && isTrue(x.enabled) && String(x.name || '').trim() === stationName);
-                        if (!match) continue;
-                    }
-                    const label = city ? `${city} / ${stationName}` : stationName;
-                    if (!opts.some((o) => o.value === rel)) opts.push({ value: rel, label });
+                    const active = (s.enabled === undefined || s.enabled === null || s.enabled === '' || isTrue(s.enabled));
+                    const label = active ? n : `${n} (inaktiv)`;
+                    if (!opts.some((o) => o.value === val)) opts.push({ value: val, label });
                 }
 
                 opts.sort((a, b) => a.label.localeCompare(b.label, 'de'));
