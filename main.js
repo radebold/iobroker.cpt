@@ -44,6 +44,7 @@ class CptAdapter extends utils.Adapter {
         // transition detection (per stationPrefix)
         this.lastFreePortsByStation = {};
         this.stationPrefixByName = {};
+        this.stationPrefixByDeviceId = {};
 
         // car position (optional) - can be sourced from foreign states
         this.carLat = null;
@@ -103,7 +104,8 @@ class CptAdapter extends utils.Adapter {
         const statuses = (Array.isArray(ports) ? ports : []).map((p) => this.normalizeStatus(p?.statusV2 || p?.status));
         if (statuses.some((s) => ['in_use', 'charging', 'occupied'].includes(s))) return 'in_use';
         if (statuses.some((s) => s === 'available')) return 'available';
-        if (statuses.some((s) => ['unavailable', 'out_of_service', 'faulted', 'offline'].includes(s))) return 'unavailable';
+        // Treat "fault" and "faulted" as unavailable to avoid contradictory UI states.
+        if (statuses.some((s) => ['unavailable', 'out_of_service', 'fault', 'faulted', 'offline'].includes(s))) return 'unavailable';
         return statuses[0] || 'unknown';
     }
 
@@ -649,24 +651,53 @@ class CptAdapter extends utils.Adapter {
             const stations = data?.station_list?.stations;
             let nearest = null;
             if (Array.isArray(stations) && stations.length) {
-                // Compute distance locally (the API sometimes omits `distance`).
-                let best = null;
-                let bestM = Infinity;
+                // Compute distance locally (the API sometimes omits `distance`) and pick the nearest *consistent* station.
+                // Consistency rule: if we already poll the station and it is "unavailable/fault/offline", do not show it as "next free".
+                const candidates = [];
                 for (const st of stations) {
                     const stLat = parseNumberLocale(st?.lat ?? st?.latitude);
                     const stLon = parseNumberLocale(st?.lon ?? st?.longitude);
                     if (!Number.isFinite(stLat) || !Number.isFinite(stLon)) continue;
                     const km = this.haversineKm(lat, lon, stLat, stLon);
                     const m = km * 1000;
-                    if (m < bestM) {
-                        bestM = m;
-                        best = st;
-                    }
+                    candidates.push({ st, m });
                 }
-                nearest = best || stations[0];
-                if (Number.isFinite(bestM) && bestM !== Infinity) {
-                    // attach computed distance for later state writing
-                    nearest.__distanceM = bestM;
+                candidates.sort((a, b) => a.m - b.m);
+
+                const isBadStatus = (s) => {
+                    const t = String(s || '').toLowerCase();
+                    return t.includes('unavailable') || t.includes('fault') || t.includes('offline') || t.includes('out_of_service');
+                };
+
+                for (const c of candidates) {
+                    const st = c.st;
+                    const portsArr = Array.isArray(st?.ports) ? st.ports : [];
+                    const freePorts = Number.isFinite(parseNumberLocale(st?.free_ports ?? st?.freePorts))
+                        ? parseNumberLocale(st?.free_ports ?? st?.freePorts)
+                        : portsArr.filter(p => String(p?.status_v2 ?? p?.statusV2 ?? p?.status).toLowerCase() === 'available').length;
+
+                    // must have at least one available port
+                    if (!(Number(freePorts) > 0)) continue;
+
+                    const stationId = String(st?.device_id ?? st?.station_id ?? st?.id ?? '').trim();
+                    const prefix = stationId ? this.stationPrefixByDeviceId[stationId] : null;
+                    if (prefix) {
+                        const stState = await this.getStateAsync(prefix + '.statusDerived').catch(() => null);
+                        const polled = stState ? stState.val : undefined;
+                        if (isBadStatus(polled)) {
+                            // skip: polled status indicates fault/unavailable
+                            continue;
+                        }
+                    }
+
+                    nearest = st;
+                    nearest.__distanceM = c.m;
+                    break;
+                }
+
+                // fallback: still pick the first entry (should be rare)
+                if (!nearest) {
+                    nearest = stations[0];
                 }
             } else {
                 nearest = this.extractNearestType2(data);
@@ -1040,6 +1071,8 @@ class CptAdapter extends utils.Adapter {
             currentPrefixes.add(stationPrefix);
 
             this.stationPrefixByName[st.name] = stationPrefix;
+            if (st.deviceId1 !== undefined && st.deviceId1 !== null) this.stationPrefixByDeviceId[String(st.deviceId1)] = stationPrefix;
+            if (st.deviceId2 !== undefined && st.deviceId2 !== null) this.stationPrefixByDeviceId[String(st.deviceId2)] = stationPrefix;
 
             await this.ensureCityChannel(`stations.${cityKey}`, city);
             await this.ensureStationObjects(stationPrefix, st, city);
