@@ -102,10 +102,15 @@ class CptAdapter extends utils.Adapter {
 
     deriveStationStatusFromPorts(ports) {
         const statuses = (Array.isArray(ports) ? ports : []).map((p) => this.normalizeStatus(p?.statusV2 || p?.status));
-        if (statuses.some((s) => ['in_use', 'charging', 'occupied'].includes(s))) return 'in_use';
+        // Priority for UI:
+        // - available: at least one free connector
+        // - in_use: no free connector, but at least one is occupied/charging
+        // - fault: no free connector, but at least one is faulted
+        // - unavailable: otherwise out of service / offline
         if (statuses.some((s) => s === 'available')) return 'available';
-        // Treat "fault" and "faulted" as unavailable to avoid contradictory UI states.
-        if (statuses.some((s) => ['unavailable', 'out_of_service', 'fault', 'faulted', 'offline'].includes(s))) return 'unavailable';
+        if (statuses.some((s) => ['in_use', 'charging', 'occupied'].includes(s))) return 'in_use';
+        if (statuses.some((s) => ['fault', 'faulted'].includes(s))) return 'fault';
+        if (statuses.some((s) => ['unavailable', 'out_of_service', 'offline'].includes(s))) return 'unavailable';
         return statuses[0] || 'unknown';
     }
 
