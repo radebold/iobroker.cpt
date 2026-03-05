@@ -1886,7 +1886,7 @@ async onReady() {
 
         const intervalMin = Number(this.config.interval) || 5;
 
-        const stations = (Array.isArray(this.config.stations) ? this.config.stations : [])
+        const stationsRaw = (Array.isArray(this.config.stations) ? this.config.stations : [])
             .filter((s) => s && typeof s === 'object')
             .map((s, idx) => {
                 const deviceId1 = s.deviceId1 ?? s.stationId ?? s.deviceId ?? s.id;
@@ -1903,6 +1903,51 @@ async onReady() {
                 };
             })
             .filter((s) => !!s.deviceId1);
+
+        // Merge duplicates by name (common case: one physical station exposes 2 deviceIds (Port 1/2) as separate entries)
+        const mergedStations = [];
+        const byName = new Map();
+        for (const s of stationsRaw) {
+            const key = String(s.name || '').trim().toLowerCase();
+            if (!byName.has(key)) byName.set(key, []);
+            byName.get(key).push(s);
+        }
+        for (const [key, group] of byName.entries()) {
+            const valid = group.filter((g) => !!g.deviceId1);
+            if (valid.length === 1) {
+                mergedStations.push(valid[0]);
+                continue;
+            }
+
+            // If any entry already has deviceId2 configured, keep the first such entry to avoid prefix collisions
+            const withSecond = valid.find((g) => !!g.deviceId2);
+            if (withSecond) {
+                mergedStations.push(withSecond);
+                if (valid.length > 1) {
+                    this.log.warn(`Station '${withSecond.name}' ist mehrfach konfiguriert. Da deviceId2 bereits gesetzt ist, wird nur dieser Eintrag genutzt; weitere Duplikate werden ignoriert.`);
+                }
+                continue;
+            }
+
+            if (valid.length === 2) {
+                const a = valid[0];
+                const b = valid[1];
+                mergedStations.push({
+                    name: a.name,
+                    enabled: !!(a.enabled || b.enabled),
+                    notifyOnAvailable: !!(a.notifyOnAvailable || b.notifyOnAvailable),
+                    deviceId1: a.deviceId1,
+                    deviceId2: b.deviceId1,
+                });
+                this.log.info(`Station '${a.name}' zusammengeführt (Port 1/2): deviceId1=${a.deviceId1}, deviceId2=${b.deviceId1}`);
+                continue;
+            }
+
+            mergedStations.push(valid[0]);
+            this.log.warn(`Station '${valid[0].name}' ist ${valid.length}x konfiguriert ohne deviceId2. Nur der erste Eintrag wird verwendet; bitte deviceId2 im Admin-UI setzen.`);
+        }
+
+        const stations = mergedStations;
 
         const enabledStations = stations.filter((s) => {
             // Backward compatible default: if the flag was not present in older configs, treat as enabled
