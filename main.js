@@ -247,6 +247,19 @@ class CptAdapter extends utils.Adapter {
 
     // ---------- Messaging ----------
 
+    async dispatchChannelMessage(inst, payload) {
+        const isTelegram = inst.startsWith('telegram.');
+        const isWhatsAppCmb = inst.startsWith('whatsapp-cmb.');
+        const isOpenWa = inst.startsWith('open-wa.');
+        const isPushover = inst.startsWith('pushover.');
+
+        if (isTelegram || isWhatsAppCmb || isOpenWa || isPushover) {
+            this.sendTo(inst, 'send', payload);
+            return;
+        }
+        this.sendTo(inst, payload);
+    }
+
     async sendMessageToChannels(text, ctx = {}) {
         const channels = this.getActiveChannels(ctx);
         if (!channels.length) {
@@ -297,7 +310,7 @@ class CptAdapter extends utils.Adapter {
             Object.keys(payload).forEach((k) => payload[k] === undefined && delete payload[k]);
 
             try {
-                this.sendTo(inst, 'send', payload);
+                await this.dispatchChannelMessage(inst, payload);
                 ok++;
                 this.log.info(`Message gesendet über ${inst}${lbl ? ' (' + lbl + ')' : ''}`);
             } catch (e) {
@@ -330,10 +343,12 @@ class CptAdapter extends utils.Adapter {
         // If nothing matches, do nothing (subscriptions define recipients)
         if (!matches.length) return { ok: 0, failed: 0, note: 'no_subscriptions' };
 
+        let ok = 0;
+        let failed = 0;
         for (const s of matches) {
             const recipientLabel = (s.recipient || '').toString().trim();
             if (!recipientLabel) continue;
-            await this.sendAvailableNotification({
+            const res = await this.sendAvailableNotification({
                 isTest,
                 station: stationName,
                 city,
@@ -341,8 +356,10 @@ class CptAdapter extends utils.Adapter {
                 portCount,
                 onlyLabel: recipientLabel,
             });
+            ok += Number(res?.ok || 0);
+            failed += Number(res?.failed || 0);
         }
-        return { ok: matches.length, failed: 0, note: 'subscriptions' };
+        return { ok, failed, note: 'subscriptions' };
     }
 
     async sendTestNotifyForPrefix(stationPrefixRel) {
@@ -677,39 +694,26 @@ class CptAdapter extends utils.Adapter {
                 for (const c of candidates) {
                     const st = c.st;
                     const portsArr = Array.isArray(st?.ports) ? st.ports : [];
-                    const stationId = String(st?.device_id ?? st?.station_id ?? st?.id ?? '').trim();
-                    const prefix = stationId ? this.stationPrefixByDeviceId[stationId] : null;
-
-                    // Prefer locally polled aggregate station data when available.
-                    // This is important for logical 2-port stations that are backed by 2 deviceIds:
-                    // if one port is occupied and one is available, the station must still count as "next free".
-                    let freePorts = Number.isFinite(parseNumberLocale(st?.free_ports ?? st?.freePorts))
+                    const freePorts = Number.isFinite(parseNumberLocale(st?.free_ports ?? st?.freePorts))
                         ? parseNumberLocale(st?.free_ports ?? st?.freePorts)
                         : portsArr.filter(p => String(p?.status_v2 ?? p?.statusV2 ?? p?.status).toLowerCase() === 'available').length;
-                    let polled;
-                    if (prefix) {
-                        const stState = await this.getStateAsync(prefix + '.statusDerived').catch(() => null);
-                        polled = stState ? stState.val : undefined;
 
-                        const freePortsState = await this.getStateAsync(prefix + '.freePorts').catch(() => null);
-                        const polledFreePorts = parseNumberLocale(freePortsState ? freePortsState.val : null);
-                        if (Number.isFinite(polledFreePorts)) {
-                            freePorts = polledFreePorts;
-                        }
-                    }
-
-                    // Must have at least one available port.
-                    // If we know the locally aggregated freePorts value, trust that over the search API.
+                    // must have at least one available port
                     if (!(Number(freePorts) > 0)) continue;
 
-                    if (prefix && isBadStatus(polled)) {
-                        // skip: polled status indicates fault/unavailable
-                        continue;
+                    const stationId = String(st?.device_id ?? st?.station_id ?? st?.id ?? '').trim();
+                    const prefix = stationId ? this.stationPrefixByDeviceId[stationId] : null;
+                    if (prefix) {
+                        const stState = await this.getStateAsync(prefix + '.statusDerived').catch(() => null);
+                        const polled = stState ? stState.val : undefined;
+                        if (isBadStatus(polled)) {
+                            // skip: polled status indicates fault/unavailable
+                            continue;
+                        }
                     }
 
                     nearest = st;
                     nearest.__distanceM = c.m;
-                    nearest.__freePorts = freePorts;
                     break;
                 }
 
@@ -751,11 +755,9 @@ class CptAdapter extends utils.Adapter {
             const latS = parseNumberLocale(nearest.lat ?? nearest.latitude);
             const lonS = parseNumberLocale(nearest.lon ?? nearest.longitude);
             const portsArr = Array.isArray(nearest.ports) ? nearest.ports : [];
-            const freePorts = Number.isFinite(parseNumberLocale(nearest.__freePorts))
-                ? parseNumberLocale(nearest.__freePorts)
-                : (Number.isFinite(parseNumberLocale(nearest.free_ports ?? nearest.freePorts))
-                    ? parseNumberLocale(nearest.free_ports ?? nearest.freePorts)
-                    : portsArr.filter(p => String(p?.status_v2 ?? p?.statusV2 ?? p?.status).toLowerCase() === 'available').length);
+            const freePorts = Number.isFinite(parseNumberLocale(nearest.free_ports ?? nearest.freePorts))
+                ? parseNumberLocale(nearest.free_ports ?? nearest.freePorts)
+                : portsArr.filter(p => String(p?.status_v2 ?? p?.statusV2 ?? p?.status).toLowerCase() === 'available').length;
             const portCount = Number.isFinite(parseNumberLocale(nearest.total_port_count ?? nearest.portCount))
                 ? parseNumberLocale(nearest.total_port_count ?? nearest.portCount)
                 : (Number.isFinite(parseNumberLocale(nearest.total_port_count)) ? parseNumberLocale(nearest.total_port_count) : portsArr.length);
@@ -829,13 +831,14 @@ class CptAdapter extends utils.Adapter {
     }
 
     async passesNotifyFilters(stationPrefixRel) {
-        const res = { ok: true, socOk: true, distanceOk: true, soc: this.carSoc, distanceM: null };
+        const res = { ok: true, socOk: true, distanceOk: true, soc: this.carSoc, distanceM: null, socSkipped: false, distanceSkipped: false };
 
         const socTh = Number(this.notifySocBelow);
-        if (Number.isFinite(socTh)) {
+        const socFilterConfigured = Number.isFinite(socTh) && socTh > 0;
+        if (socFilterConfigured) {
             if (typeof this.carSoc !== 'number' || !Number.isFinite(this.carSoc)) {
-                res.ok = false;
-                res.socOk = false;
+                // Do not block notifications when no SoC source is configured / available.
+                res.socSkipped = true;
             } else {
                 res.socOk = this.carSoc < socTh;
                 res.ok = res.ok && res.socOk;
@@ -843,13 +846,14 @@ class CptAdapter extends utils.Adapter {
         }
 
         const distMax = Number(this.notifyMaxDistanceM);
-        if (Number.isFinite(distMax)) {
+        const distanceFilterConfigured = Number.isFinite(distMax) && distMax > 0;
+        if (distanceFilterConfigured) {
             const st = await this.getStateAsync(`${stationPrefixRel}.distance.m`).catch(() => null);
             const d = st && st.val !== undefined && st.val !== null ? Number(st.val) : NaN;
             res.distanceM = Number.isFinite(d) ? d : null;
             if (!Number.isFinite(d)) {
-                res.ok = false;
-                res.distanceOk = false;
+                // Do not block notifications when no car position is configured / available.
+                res.distanceSkipped = true;
             } else {
                 res.distanceOk = d <= distMax;
                 res.ok = res.ok && res.distanceOk;
@@ -924,29 +928,33 @@ class CptAdapter extends utils.Adapter {
     async attemptNotifyForStation({ stationPrefixRel, city, stationName, freePorts, portCount, reason }) {
         const meta = this.getNotifyMeta(stationPrefixRel);
 
-        const posKey = this.getCarPosKey();
-
         // Reset notified when station is not free anymore
         if (!(Number(freePorts) > 0)) {
             meta.notifiedPosKey = null;
+            meta.lastSent = 0;
             return;
         }
 
-        // Require a stable car position (needed for distance filter + "notify again only after position changed")
-        if (!posKey) return;
+        // Use a synthetic key when no car position is available so notifications still work
+        // without optional GPS data.
+        const posKey = this.getCarPosKey() || '__nopos__';
 
         // Only one notification per free phase AND car position key
         if (meta.notifiedPosKey && meta.notifiedPosKey === posKey) return;
 
-        // Station toggle OR subscriptions decide whether station is relevant
+        // Respect cooldown (also applies for __nopos__).
+        const cooldownMin = Number(this.notifyCooldownMin);
+        if (Number.isFinite(cooldownMin) && cooldownMin > 0 && meta.lastSent) {
+            const minDeltaMs = cooldownMin * 60 * 1000;
+            if ((Date.now() - meta.lastSent) < minDeltaMs) return;
+        }
+
         const notifyState = await this.getStateAsync(`${stationPrefixRel}.notifyOnAvailable`).catch(() => null);
         const notifyEnabled = notifyState?.val === true;
         const hasSubs = this.stationHasNotifyTarget(stationPrefixRel, stationName);
 
-        // New rule: Station must have Notify enabled AND there must be at least one matching subscription
         if (!notifyEnabled || !hasSubs) return;
 
-        // Filters: SoC + distance must be determinable and pass
         const f = await this.passesNotifyFilters(stationPrefixRel);
         if (!f.ok) {
             const reasons = [];
@@ -956,10 +964,18 @@ class CptAdapter extends utils.Adapter {
             return;
         }
 
-        await this.notifySubscribers({ stationPrefixRel, city, stationName, freePorts, portCount, isTest: false });
-        meta.notifiedPosKey = posKey;
-        meta.lastSent = Date.now();
-        this.log.info(`Notify (${reason}): ${stationName} (${city}) freePorts=${freePorts}/${portCount} (SoC=${f.soc ?? 'n/a'}%, dist=${f.distanceM ?? 'n/a'}m)`);
+        const res = await this.notifySubscribers({ stationPrefixRel, city, stationName, freePorts, portCount, isTest: false });
+        if (Number(res?.ok || 0) > 0) {
+            meta.notifiedPosKey = posKey;
+            meta.lastSent = Date.now();
+            const filterInfo = [
+                f.socSkipped ? 'SoC-Filter übersprungen' : `SoC=${f.soc ?? 'n/a'}%`,
+                f.distanceSkipped ? 'Distanz-Filter übersprungen' : `dist=${f.distanceM ?? 'n/a'}m`,
+            ].join(', ');
+            this.log.info(`Notify (${reason}): ${stationName} (${city}) freePorts=${freePorts}/${portCount} [${filterInfo}]`);
+        } else {
+            this.log.warn(`Notify ohne Versand (${reason}): ${stationName} (${city}) – keine passenden aktiven Empfänger gefunden`);
+        }
     }
 
     
@@ -1871,8 +1887,8 @@ async onReady() {
         this.carLatStatic = (this.config && this.config.carLat !== undefined && this.config.carLat !== null && this.config.carLat !== '') ? Number(this.config.carLat) : null;
         this.carLonStatic = (this.config && this.config.carLon !== undefined && this.config.carLon !== null && this.config.carLon !== '') ? Number(this.config.carLon) : null;
 
-        this.notifySocBelow = (this.config && this.config.notifySocBelow !== undefined && this.config.notifySocBelow !== null && this.config.notifySocBelow !== '') ? Number(this.config.notifySocBelow) : 30;
-        this.notifyMaxDistanceM = (this.config && this.config.notifyMaxDistanceM !== undefined && this.config.notifyMaxDistanceM !== null && this.config.notifyMaxDistanceM !== '') ? Number(this.config.notifyMaxDistanceM) : 500;
+        this.notifySocBelow = (this.config && this.config.notifySocBelow !== undefined && this.config.notifySocBelow !== null && this.config.notifySocBelow !== '') ? Number(this.config.notifySocBelow) : 0;
+        this.notifyMaxDistanceM = (this.config && this.config.notifyMaxDistanceM !== undefined && this.config.notifyMaxDistanceM !== null && this.config.notifyMaxDistanceM !== '') ? Number(this.config.notifyMaxDistanceM) : 0;
         this.notifyCooldownMin = (this.config && this.config.notifyCooldownMin !== undefined && this.config.notifyCooldownMin !== null && this.config.notifyCooldownMin !== '') ? Number(this.config.notifyCooldownMin) : 15;
 
         this.log.debug(`Config (car): latId='${this.carLatStateId}' lonId='${this.carLonStateId}' socId='${this.carSocStateId}' latStatic=${this.carLatStatic} lonStatic=${this.carLonStatic} socBelow=${this.notifySocBelow} maxDistM=${this.notifyMaxDistanceM} cooldownMin=${this.notifyCooldownMin}`);
@@ -1901,7 +1917,7 @@ async onReady() {
 
         const intervalMin = Number(this.config.interval) || 5;
 
-        const stationsRaw = (Array.isArray(this.config.stations) ? this.config.stations : [])
+        const stations = (Array.isArray(this.config.stations) ? this.config.stations : [])
             .filter((s) => s && typeof s === 'object')
             .map((s, idx) => {
                 const deviceId1 = s.deviceId1 ?? s.stationId ?? s.deviceId ?? s.id;
@@ -1918,51 +1934,6 @@ async onReady() {
                 };
             })
             .filter((s) => !!s.deviceId1);
-
-        // Merge duplicates by name (common case: one physical station exposes 2 deviceIds (Port 1/2) as separate entries)
-        const mergedStations = [];
-        const byName = new Map();
-        for (const s of stationsRaw) {
-            const key = String(s.name || '').trim().toLowerCase();
-            if (!byName.has(key)) byName.set(key, []);
-            byName.get(key).push(s);
-        }
-        for (const [key, group] of byName.entries()) {
-            const valid = group.filter((g) => !!g.deviceId1);
-            if (valid.length === 1) {
-                mergedStations.push(valid[0]);
-                continue;
-            }
-
-            // If any entry already has deviceId2 configured, keep the first such entry to avoid prefix collisions
-            const withSecond = valid.find((g) => !!g.deviceId2);
-            if (withSecond) {
-                mergedStations.push(withSecond);
-                if (valid.length > 1) {
-                    this.log.warn(`Station '${withSecond.name}' ist mehrfach konfiguriert. Da deviceId2 bereits gesetzt ist, wird nur dieser Eintrag genutzt; weitere Duplikate werden ignoriert.`);
-                }
-                continue;
-            }
-
-            if (valid.length === 2) {
-                const a = valid[0];
-                const b = valid[1];
-                mergedStations.push({
-                    name: a.name,
-                    enabled: !!(a.enabled || b.enabled),
-                    notifyOnAvailable: !!(a.notifyOnAvailable || b.notifyOnAvailable),
-                    deviceId1: a.deviceId1,
-                    deviceId2: b.deviceId1,
-                });
-                this.log.info(`Station '${a.name}' zusammengeführt (Port 1/2): deviceId1=${a.deviceId1}, deviceId2=${b.deviceId1}`);
-                continue;
-            }
-
-            mergedStations.push(valid[0]);
-            this.log.warn(`Station '${valid[0].name}' ist ${valid.length}x konfiguriert ohne deviceId2. Nur der erste Eintrag wird verwendet; bitte deviceId2 im Admin-UI setzen.`);
-        }
-
-        const stations = mergedStations;
 
         const enabledStations = stations.filter((s) => {
             // Backward compatible default: if the flag was not present in older configs, treat as enabled
@@ -2177,9 +2148,7 @@ async onReady() {
                 // IMPORTANT: log this action because sendTo itself is fire-and-forget
                 this.log.info(`Kommunikation-Test: instance=${instance}${user ? ` user=${user}` : ''}${label ? ` label=${label}` : ''}`);
 
-                // open-wa uses a dedicated command; others usually accept the payload directly
-                if (isOpenWa) this.sendTo(instance, 'send', payload);
-                else this.sendTo(instance, payload);
+                await this.dispatchChannelMessage(instance, payload);
 
                 this.log.info(`Kommunikation-Test: sendTo ausgelöst (${instance})`);
                 obj.callback && this.sendTo(obj.from, obj.command, { data: { result: `Test an ${instance} gesendet${user ? ' (' + user + ')' : ''}` } }, obj.callback);

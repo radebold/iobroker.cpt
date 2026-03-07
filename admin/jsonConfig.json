@@ -298,27 +298,27 @@
           "type": "number",
           "min": 0,
           "max": 100,
-          "default": 30,
+          "default": 0,
           "label": {
-            "de": "Notify nur bei SoC < (%)",
-            "en": "Notify only if SoC < (%)"
+            "de": "Notify nur bei SoC < (%) (0 = aus)",
+            "en": "Notify only if SoC < (%) (0 = off)"
           },
           "help": {
-            "de": "Benachrichtigung wird nur gesendet, wenn der Auto-Ladestand (SoC) unter diesem Wert liegt.",
-            "en": "Notification is sent only if car SoC is below this value."
+            "de": "Optionaler Filter. 0 = deaktiviert. Nur anwenden, wenn ein SoC-Datenpunkt vorhanden ist.",
+            "en": "Optional filter. 0 = disabled. Applied only when a car SoC source is available."
           }
         },
         "notifyMaxDistanceM": {
           "type": "number",
           "min": 0,
-          "default": 500,
+          "default": 0,
           "label": {
-            "de": "Notify nur bei Distanz <= (m)",
-            "en": "Notify only if distance <= (m)"
+            "de": "Notify nur bei Distanz <= (m) (0 = aus)",
+            "en": "Notify only if distance <= (m) (0 = off)"
           },
           "help": {
-            "de": "Benachrichtigung wird nur gesendet, wenn die Distanz zur Station <= diesem Wert ist (Auto-Lat/Lon muss vorhanden sein).",
-            "en": "Notification is sent only if distance to the station is <= this value (car lat/lon required)."
+            "de": "Optionaler Filter. 0 = deaktiviert. Wird nur angewendet, wenn Auto-Lat/Lon verfügbar sind.",
+            "en": "Optional filter. 0 = disabled. Applied only when car lat/lon are available."
           }
         },
         "notifyCooldownMin": {
