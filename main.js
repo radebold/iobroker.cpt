@@ -677,26 +677,39 @@ class CptAdapter extends utils.Adapter {
                 for (const c of candidates) {
                     const st = c.st;
                     const portsArr = Array.isArray(st?.ports) ? st.ports : [];
-                    const freePorts = Number.isFinite(parseNumberLocale(st?.free_ports ?? st?.freePorts))
-                        ? parseNumberLocale(st?.free_ports ?? st?.freePorts)
-                        : portsArr.filter(p => String(p?.status_v2 ?? p?.statusV2 ?? p?.status).toLowerCase() === 'available').length;
-
-                    // must have at least one available port
-                    if (!(Number(freePorts) > 0)) continue;
-
                     const stationId = String(st?.device_id ?? st?.station_id ?? st?.id ?? '').trim();
                     const prefix = stationId ? this.stationPrefixByDeviceId[stationId] : null;
+
+                    // Prefer locally polled aggregate station data when available.
+                    // This is important for logical 2-port stations that are backed by 2 deviceIds:
+                    // if one port is occupied and one is available, the station must still count as "next free".
+                    let freePorts = Number.isFinite(parseNumberLocale(st?.free_ports ?? st?.freePorts))
+                        ? parseNumberLocale(st?.free_ports ?? st?.freePorts)
+                        : portsArr.filter(p => String(p?.status_v2 ?? p?.statusV2 ?? p?.status).toLowerCase() === 'available').length;
+                    let polled;
                     if (prefix) {
                         const stState = await this.getStateAsync(prefix + '.statusDerived').catch(() => null);
-                        const polled = stState ? stState.val : undefined;
-                        if (isBadStatus(polled)) {
-                            // skip: polled status indicates fault/unavailable
-                            continue;
+                        polled = stState ? stState.val : undefined;
+
+                        const freePortsState = await this.getStateAsync(prefix + '.freePorts').catch(() => null);
+                        const polledFreePorts = parseNumberLocale(freePortsState ? freePortsState.val : null);
+                        if (Number.isFinite(polledFreePorts)) {
+                            freePorts = polledFreePorts;
                         }
+                    }
+
+                    // Must have at least one available port.
+                    // If we know the locally aggregated freePorts value, trust that over the search API.
+                    if (!(Number(freePorts) > 0)) continue;
+
+                    if (prefix && isBadStatus(polled)) {
+                        // skip: polled status indicates fault/unavailable
+                        continue;
                     }
 
                     nearest = st;
                     nearest.__distanceM = c.m;
+                    nearest.__freePorts = freePorts;
                     break;
                 }
 
@@ -738,9 +751,11 @@ class CptAdapter extends utils.Adapter {
             const latS = parseNumberLocale(nearest.lat ?? nearest.latitude);
             const lonS = parseNumberLocale(nearest.lon ?? nearest.longitude);
             const portsArr = Array.isArray(nearest.ports) ? nearest.ports : [];
-            const freePorts = Number.isFinite(parseNumberLocale(nearest.free_ports ?? nearest.freePorts))
-                ? parseNumberLocale(nearest.free_ports ?? nearest.freePorts)
-                : portsArr.filter(p => String(p?.status_v2 ?? p?.statusV2 ?? p?.status).toLowerCase() === 'available').length;
+            const freePorts = Number.isFinite(parseNumberLocale(nearest.__freePorts))
+                ? parseNumberLocale(nearest.__freePorts)
+                : (Number.isFinite(parseNumberLocale(nearest.free_ports ?? nearest.freePorts))
+                    ? parseNumberLocale(nearest.free_ports ?? nearest.freePorts)
+                    : portsArr.filter(p => String(p?.status_v2 ?? p?.statusV2 ?? p?.status).toLowerCase() === 'available').length);
             const portCount = Number.isFinite(parseNumberLocale(nearest.total_port_count ?? nearest.portCount))
                 ? parseNumberLocale(nearest.total_port_count ?? nearest.portCount)
                 : (Number.isFinite(parseNumberLocale(nearest.total_port_count)) ? parseNumberLocale(nearest.total_port_count) : portsArr.length);
