@@ -539,6 +539,48 @@ class CptAdapter extends utils.Adapter {
         this.log.debug('Auto init: keine gültige Position (weder extern noch statisch)');
     }
 
+    async resolveCurrentCarPosition() {
+        try {
+            // Re-read configured foreign GPS states on demand so 'nearest free station'
+            // follows the current car position even if a state-change event was missed.
+            if (this.carLatStateId && this.carLonStateId) {
+                const latSt = await this.getForeignStateAsync(this.carLatStateId).catch(() => null);
+                const lonSt = await this.getForeignStateAsync(this.carLonStateId).catch(() => null);
+                const latRaw = latSt && latSt.val !== undefined ? latSt.val : undefined;
+                const lonRaw = lonSt && lonSt.val !== undefined ? lonSt.val : undefined;
+                const latN = latRaw !== undefined ? parseNumberLocale(latRaw) : NaN;
+                const lonN = lonRaw !== undefined ? parseNumberLocale(lonRaw) : NaN;
+                if (Number.isFinite(latN) && Number.isFinite(lonN)) {
+                    const changed = this.carLat !== latN || this.carLon !== lonN;
+                    this.carLat = latN;
+                    this.carLon = lonN;
+                    await this.updateStateIfChanged('car.lat', latN);
+                    await this.updateStateIfChanged('car.lon', lonN);
+                    await this.updateStateIfChanged('car.source', `${this.carLatStateId} | ${this.carLonStateId}`.trim());
+                    if (changed) await this.setStateAsync('car.lastUpdate', { val: new Date().toISOString(), ack: true });
+                    return { lat: latN, lon: lonN, source: 'foreign' };
+                }
+            }
+
+            if (Number.isFinite(this.carLat) && Number.isFinite(this.carLon)) {
+                return { lat: this.carLat, lon: this.carLon, source: 'cache' };
+            }
+
+            if (typeof this.carLatStatic === 'number' && Number.isFinite(this.carLatStatic) &&
+                typeof this.carLonStatic === 'number' && Number.isFinite(this.carLonStatic)) {
+                this.carLat = this.carLatStatic;
+                this.carLon = this.carLonStatic;
+                await this.updateStateIfChanged('car.lat', this.carLatStatic);
+                await this.updateStateIfChanged('car.lon', this.carLonStatic);
+                await this.updateStateIfChanged('car.source', 'static');
+                return { lat: this.carLatStatic, lon: this.carLonStatic, source: 'static' };
+            }
+        } catch (e) {
+            this.log.debug(`resolveCurrentCarPosition failed: ${e.message}`);
+        }
+        return { lat: this.carLat, lon: this.carLon, source: 'none' };
+    }
+
     async initCarSoc() {
         if (!this.carSocStateId) return;
         const st = await this.getForeignStateAsync(this.carSocStateId).catch(() => null);
@@ -618,6 +660,12 @@ class CptAdapter extends utils.Adapter {
         // NOTE: A previous build accidentally inserted an invalid stray "(lat, lon) {" line here.
         // Keep this method as the only function header.
         if (!isTrue(this.config.nearestType2Enabled)) return;
+
+        const refPos = await this.resolveCurrentCarPosition();
+        if (Number.isFinite(refPos?.lat) && Number.isFinite(refPos?.lon)) {
+            lat = refPos.lat;
+            lon = refPos.lon;
+        }
         if (!Number.isFinite(lat) || !Number.isFinite(lon)) return;
 
         const radiusM = Number(this.config.nearestRadiusM) || 2000;
@@ -1300,6 +1348,7 @@ async cleanupObsoleteStations(currentPrefixes) {
 
     async updateDistancesForAllStations() {
         try {
+            await this.resolveCurrentCarPosition();
             const list = await this.getStatesAsync(this.namespace + '.stations.*.*.gps.json');
             for (const [id, st] of Object.entries(list || {})) {
                 const relPrefix = id.replace(this.namespace + '.', '').replace(/\.gps\.json$/, '');
