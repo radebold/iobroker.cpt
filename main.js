@@ -100,8 +100,18 @@ class CptAdapter extends utils.Adapter {
         return s || 'unknown';
     }
 
+    getPortOccupancyStatus(port) {
+        // Use the classic ChargePoint status for logic first.
+        // statusV2 is kept for UI detail, but must not override availability logic.
+        return this.normalizeStatus(port?.status || port?.statusV2);
+    }
+
+    getPortUiStatus(port) {
+        return this.normalizeStatus(port?.statusV2 || port?.status);
+    }
+
     deriveStationStatusFromPorts(ports) {
-        const statuses = (Array.isArray(ports) ? ports : []).map((p) => this.normalizeStatus(p?.statusV2 || p?.status));
+        const statuses = (Array.isArray(ports) ? ports : []).map((p) => this.getPortOccupancyStatus(p));
         // Priority for UI:
         // - available: at least one free connector
         // - in_use: no free connector, but at least one is occupied/charging
@@ -715,7 +725,7 @@ class CptAdapter extends utils.Adapter {
                     const portsArr = Array.isArray(st?.ports) ? st.ports : [];
                     const freePorts = Number.isFinite(parseNumberLocale(st?.free_ports ?? st?.freePorts))
                         ? parseNumberLocale(st?.free_ports ?? st?.freePorts)
-                        : portsArr.filter(p => String(p?.status_v2 ?? p?.statusV2 ?? p?.status).toLowerCase() === 'available').length;
+                        : portsArr.filter(p => String(p?.status ?? p?.status_v2 ?? p?.statusV2).toLowerCase() === 'available').length;
 
                     // must have at least one available port
                     if (!(Number(freePorts) > 0)) continue;
@@ -776,7 +786,7 @@ class CptAdapter extends utils.Adapter {
             const portsArr = Array.isArray(nearest.ports) ? nearest.ports : [];
             const freePorts = Number.isFinite(parseNumberLocale(nearest.free_ports ?? nearest.freePorts))
                 ? parseNumberLocale(nearest.free_ports ?? nearest.freePorts)
-                : portsArr.filter(p => String(p?.status_v2 ?? p?.statusV2 ?? p?.status).toLowerCase() === 'available').length;
+                : portsArr.filter(p => String(p?.status ?? p?.status_v2 ?? p?.statusV2).toLowerCase() === 'available').length;
             const portCount = Number.isFinite(parseNumberLocale(nearest.total_port_count ?? nearest.portCount))
                 ? parseNumberLocale(nearest.total_port_count ?? nearest.portCount)
                 : (Number.isFinite(parseNumberLocale(nearest.total_port_count)) ? parseNumberLocale(nearest.total_port_count) : portsArr.length);
@@ -972,7 +982,10 @@ class CptAdapter extends utils.Adapter {
         const notifyEnabled = notifyState?.val === true;
         const hasSubs = this.stationHasNotifyTarget(stationPrefixRel, stationName);
 
-        if (!notifyEnabled || !hasSubs) return;
+        if (!notifyEnabled || !hasSubs) {
+            this.log.debug(`Notify übersprungen (${reason}): ${stationName} (${city}) – notifyEnabled=${notifyEnabled} hasSubs=${hasSubs}`);
+            return;
+        }
 
         const f = await this.passesNotifyFilters(stationPrefixRel);
         if (!f.ok) {
@@ -1157,7 +1170,7 @@ class CptAdapter extends utils.Adapter {
 
             const ports = this.buildLogicalPorts(data1, data2, !!st.deviceId2);
             const portCount = st.deviceId2 ? 2 : ports.length;
-            const freePorts = ports.reduce((acc, p) => acc + (this.normalizeStatus(p?.statusV2 || p?.status) === 'available' ? 1 : 0), 0);
+            const freePorts = ports.reduce((acc, p) => acc + (this.getPortOccupancyStatus(p) === 'available' ? 1 : 0), 0);
             const derived = this.deriveStationStatusFromPorts(ports);
 
             // validity check: hide stations with incomplete base data (e.g. missing city/gps/ports)
@@ -1180,6 +1193,11 @@ class CptAdapter extends utils.Adapter {
 
 
             let anyPortBecameAvailable = false;
+            const prevFreePortsState = await this.getStateAsync(`${stationPrefix}.freePorts`).catch(() => null);
+            const prevFreePorts = prevFreePortsState && prevFreePortsState.val !== undefined && prevFreePortsState.val !== null
+                ? Number(prevFreePortsState.val)
+                : null;
+            const stationBecameAvailable = !(Number(prevFreePorts) > 0) && Number(freePorts) > 0;
 
             await this.updateStateIfChanged(`${stationPrefix}.portCount`, portCount);
             await this.updateStateIfChanged(`${stationPrefix}.freePorts`, freePorts);
@@ -1194,7 +1212,7 @@ class CptAdapter extends utils.Adapter {
                 const portPrefix = await this.ensurePortObjects(stationPrefix, outletNumber);
 
                 // detect transition to "available" per port (for notifications)
-                const curStatusNorm = this.normalizeStatus(port?.statusV2 || port?.status);
+                const curStatusNorm = this.getPortOccupancyStatus(port);
                 const cacheKey = `${stationPrefix}|${outletNumber}`;
                 const prevStatusNorm = this.lastPortStatusByKey[cacheKey];
                 if (prevStatusNorm !== undefined && prevStatusNorm !== 'available' && curStatusNorm === 'available') {
@@ -1218,15 +1236,19 @@ class CptAdapter extends utils.Adapter {
             }
 
             // notify logic: when any port transitions to "available"
-            if (anyPortBecameAvailable) {
+            // plus a station-level fallback when freePorts changes from 0 to >0
+            if (anyPortBecameAvailable || stationBecameAvailable) {
                 await this.attemptNotifyForStation({
                     stationPrefixRel: stationPrefix,
                     city,
                     stationName: st.name,
                     freePorts,
                     portCount,
-                    reason: 'portAvailable',
+                    reason: anyPortBecameAvailable ? 'portAvailable' : 'stationAvailable',
                 });
+
+                // Update nearest free station immediately after a free transition.
+                this.scheduleNearestType2Update(anyPortBecameAvailable ? 'portAvailable' : 'stationAvailable');
             }
 
             this.scheduleVisHtmlUpdate('state change');
