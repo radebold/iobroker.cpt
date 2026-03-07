@@ -1126,6 +1126,30 @@ class CptAdapter extends utils.Adapter {
         return Array.isArray(data1?.portsInfo?.ports) ? data1.portsInfo.ports : [];
     }
 
+    getConfiguredStations() {
+        const stations = (Array.isArray(this.config.stations) ? this.config.stations : [])
+            .filter((s) => s && typeof s === 'object')
+            .map((s, idx) => {
+                const deviceId1 = s.deviceId1 ?? s.stationId ?? s.deviceId ?? s.id;
+                const deviceId2 = s.deviceId2 ?? null;
+                const name = s.name || `station_${deviceId1 || idx + 1}`;
+                const enabled = (s.enabled == undefined || s.enabled == null) ? true : isTrue(s.enabled);
+                return {
+                    name,
+                    enabled,
+                    notifyOnAvailable: s.notifyOnAvailable === true,
+                    deviceId1: deviceId1 ? Number(deviceId1) : null,
+                    deviceId2: deviceId2 ? Number(deviceId2) : null,
+                };
+            })
+            .filter((s) => !!s.deviceId1);
+
+        return stations.filter((s) => {
+            if (s.enabled === undefined || s.enabled === null || s.enabled === '') return true;
+            return isTrue(s.enabled);
+        });
+    }
+
     async updateAllStations(stations) {
         const currentPrefixes = new Set();
         for (const st of stations) {
@@ -1960,36 +1984,15 @@ async onReady() {
         const intervalMin = Number(this.config.interval) || 5;
 
         const stations = (Array.isArray(this.config.stations) ? this.config.stations : [])
-            .filter((s) => s && typeof s === 'object')
-            .map((s, idx) => {
-                const deviceId1 = s.deviceId1 ?? s.stationId ?? s.deviceId ?? s.id;
-                const deviceId2 = s.deviceId2 ?? null;
-                const name = s.name || `station_${deviceId1 || idx + 1}`;
-                // Enabled can be boolean/number/string from admin JSON config
-                const enabled = (s.enabled == undefined || s.enabled == null) ? true : isTrue(s.enabled);
-                return {
-                    name,
-                    enabled,
-                    notifyOnAvailable: s.notifyOnAvailable === true,
-                    deviceId1: deviceId1 ? Number(deviceId1) : null,
-                    deviceId2: deviceId2 ? Number(deviceId2) : null,
-                };
-            })
-            .filter((s) => !!s.deviceId1);
-
-        const enabledStations = stations.filter((s) => {
-            // Backward compatible default: if the flag was not present in older configs, treat as enabled
-            if (s.enabled === undefined || s.enabled === null || s.enabled === '') return true;
-            return isTrue(s.enabled);
-        });
+            .filter((s) => s && typeof s === 'object');
+        const enabledStations = this.getConfiguredStations();
 
         if (!enabledStations.length) {
-            this.log.warn('Keine aktiven Stationen konfiguriert (enabled=false)');
-            return;
-        }
-
-        if (!stations.length) {
-            this.log.warn('Keine gültigen Stationen konfiguriert');
+            if (!stations.length) {
+                this.log.warn('Keine gültigen Stationen konfiguriert');
+            } else {
+                this.log.warn('Keine aktiven Stationen konfiguriert (enabled=false)');
+            }
             return;
         }
 
