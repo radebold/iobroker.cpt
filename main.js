@@ -1599,7 +1599,7 @@ async cleanupObsoleteStations(currentPrefixes) {
         };
 
         const updated = new Date().toLocaleString('de-DE');
-        const refreshBtn = `<button onclick="try{ if(window.vis && typeof vis.setValue==='function'){ vis.setValue('${this.namespace}.tools.refreshNow', true); } else if(window.vis && vis.conn && typeof vis.conn.setState==='function'){ vis.conn.setState('${this.namespace}.tools.refreshNow', true); } }catch(e){ console.log('ChargePoint refresh failed', e); }" style="background:#2b8cff;border:none;color:#fff;padding:8px 12px;border-radius:10px;font-size:13px;font-weight:800;cursor:pointer;white-space:nowrap;">🔄 Refresh</button>`;
+        const refreshBtn = `<button onclick="var b=this;try{b.disabled=true;b.style.background='#6b7280';b.style.cursor='wait';b.dataset.txt=b.innerHTML;b.innerHTML='⏳ Aktualisiere...';if(window.vis && typeof vis.setValue==='function'){ vis.setValue('${this.namespace}.tools.refreshNow', true); } else if(window.vis && vis.conn && typeof vis.conn.setState==='function'){ vis.conn.setState('${this.namespace}.tools.refreshNow', true); }}catch(e){ console.log('ChargePoint refresh failed', e); } setTimeout(function(){ try{b.disabled=false;b.style.background='#2b8cff';b.style.cursor='pointer';b.innerHTML='🔄 Refresh';}catch(_e){} }, 4000);" style="background:#2b8cff;border:none;color:#fff;padding:8px 12px;border-radius:10px;font-size:13px;font-weight:800;cursor:pointer;white-space:nowrap;transition:all .2s ease;">🔄 Refresh</button>`;
         let out = `
 <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;font-size:16px;">
   <div style="display:flex;align-items:flex-end;justify-content:space-between;gap:10px;margin-bottom:10px;">
@@ -1834,7 +1834,7 @@ async cleanupObsoleteStations(currentPrefixes) {
         };
 
         const updated = new Date().toLocaleString('de-DE');
-        const refreshBtn = `<button onclick="try{ if(window.vis && typeof vis.setValue==='function'){ vis.setValue('${this.namespace}.tools.refreshNow', true); } else if(window.vis && vis.conn && typeof vis.conn.setState==='function'){ vis.conn.setState('${this.namespace}.tools.refreshNow', true); } }catch(e){ console.log('ChargePoint refresh failed', e); }" style="background:#2b8cff;border:none;color:#fff;padding:6px 10px;border-radius:8px;font-size:12px;font-weight:800;cursor:pointer;white-space:nowrap;">🔄 Refresh</button>`;
+        const refreshBtn = `<button onclick="var b=this;try{b.disabled=true;b.style.background='#6b7280';b.style.cursor='wait';b.dataset.txt=b.innerHTML;b.innerHTML='⏳ Aktualisiere...';if(window.vis && typeof vis.setValue==='function'){ vis.setValue('${this.namespace}.tools.refreshNow', true); } else if(window.vis && vis.conn && typeof vis.conn.setState==='function'){ vis.conn.setState('${this.namespace}.tools.refreshNow', true); }}catch(e){ console.log('ChargePoint refresh failed', e); } setTimeout(function(){ try{b.disabled=false;b.style.background='#2b8cff';b.style.cursor='pointer';b.innerHTML='🔄 Refresh';}catch(_e){} }, 4000);" style="background:#2b8cff;border:none;color:#fff;padding:6px 10px;border-radius:8px;font-size:12px;font-weight:800;cursor:pointer;white-space:nowrap;transition:all .2s ease;">🔄 Refresh</button>`;
         let out = `
 <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;font-size:14px;">
   <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:10px;">
