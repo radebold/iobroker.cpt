@@ -914,6 +914,11 @@ class CptAdapter extends utils.Adapter {
         return Math.round(enter * 1.1); // 500 -> 550
     }
 
+    isDistanceFilterConfigured() {
+        const enter = Number(this.notifyMaxDistanceM);
+        return Number.isFinite(enter) && enter > 0;
+    }
+
     async computeInRange(stationPrefixRel) {
         const meta = this.getNotifyMeta(stationPrefixRel);
         const enter = Number(this.notifyMaxDistanceM);
@@ -1399,6 +1404,26 @@ async cleanupObsoleteStations(currentPrefixes) {
                 const info = this.stationInfoByPrefix[prefix] || {};
                 const portCountSt = await this.getStateAsync(`${prefix}.portCount`).catch(() => null);
                 const portCount = portCountSt?.val !== undefined ? Number(portCountSt.val) : undefined;
+
+                // Geo-entry handling (only when a distance filter is configured)
+                if (this.isDistanceFilterConfigured()) {
+                    const range = await this.computeInRange(prefix);
+                    if (range.exited) {
+                        // Allow a new notification when re-entering the radius
+                        this.getNotifyMeta(prefix).notifiedPosKey = null;
+                    }
+                    if (range.entered) {
+                        await this.attemptNotifyForStation({
+                            stationPrefixRel: prefix,
+                            city: info.city || prefix.split('.')[1] || '',
+                            stationName: info.name || prefix.split('.').pop(),
+                            freePorts,
+                            portCount,
+                            reason: 'geoEntry',
+                        });
+                        continue; // geoEntry is the most explicit trigger
+                    }
+                }
 
                 await this.attemptNotifyForStation({
                     stationPrefixRel: prefix,
