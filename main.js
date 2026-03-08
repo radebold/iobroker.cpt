@@ -1509,7 +1509,7 @@ async cleanupObsoleteStations(currentPrefixes) {
       <div style="font-weight:900;font-size:18px;">⚡ ChargePoint</div>
       <div style="opacity:.7;font-size:12px;">${esc(updated)}</div>
     </div>
-    <button class="cpRefreshBtn" onclick="(function(btn){btn.style.background='#777';btn.innerText='⏳ Refresh...';try{if(window.vis&&vis.conn){vis.conn.setState('${refreshStateId}', true);}else if(window.vis&&vis.conn&&typeof vis.conn.setState==='function'){vis.conn.setState('${refreshStateId}', true);}}catch(e){console.log('ChargePoint refresh error',e);}})(this)">🔄 Refresh</button>
+    <button class="cpRefreshBtn" onclick="(function(btn){try{if(btn){btn.style.background='#777';btn.textContent='⏳ Refresh...';}if(window.vis&&vis.conn&&typeof vis.conn.setState==='function'){vis.conn.setState('${refreshStateId}', true);} }catch(e){console.log('ChargePoint refresh error',e); if(btn){btn.style.background='#c62828';btn.textContent='⚠ Refresh';}}})(this)">🔄 Refresh</button>
   </div>
 
   ${(() => {
@@ -1748,7 +1748,7 @@ async cleanupObsoleteStations(currentPrefixes) {
       <div style="font-weight:800;font-size:16px;white-space:nowrap;">⚡ ChargePoint</div>
       <div style="opacity:.75;font-size:12px;white-space:nowrap;">Update: ${esc(updated)}</div>
     </div>
-    <button class="cpRefreshBtn" onclick="(function(btn){btn.style.background='#777';btn.innerText='⏳ Refresh...';try{if(window.vis&&vis.conn){vis.conn.setState('${refreshStateId}', true);}else if(window.vis&&vis.conn&&typeof vis.conn.setState==='function'){vis.conn.setState('${refreshStateId}', true);}}catch(e){console.log('ChargePoint refresh error',e);}})(this)">🔄 Refresh</button>
+    <button class="cpRefreshBtn" onclick="(function(btn){try{if(btn){btn.style.background='#777';btn.textContent='⏳ Refresh...';}if(window.vis&&vis.conn&&typeof vis.conn.setState==='function'){vis.conn.setState('${refreshStateId}', true);} }catch(e){console.log('ChargePoint refresh error',e); if(btn){btn.style.background='#c62828';btn.textContent='⚠ Refresh';}}})(this)">🔄 Refresh</button>
 
   ${(() => {
       const nName  = getVal('nearestType2.name') ?? '';
