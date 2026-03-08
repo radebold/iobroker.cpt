@@ -1567,6 +1567,32 @@ async cleanupObsoleteStations(currentPrefixes) {
 
 
     
+
+    renderVisRefreshButtonHtml() {
+        const ns = this.namespace;
+        return `
+<div style="display:flex;justify-content:flex-end;align-items:center;gap:8px;margin:0 0 10px 0;">
+  <button onclick="cpRefreshNow()" style="background:#2b8cff;border:none;color:#fff;padding:7px 12px;border-radius:10px;font-size:12px;font-weight:800;cursor:pointer;box-shadow:0 4px 12px rgba(43,140,255,.28);">🔄 Refresh</button>
+</div>
+<script>
+function cpRefreshNow(){
+  try {
+    if (window.vis && typeof vis.setValue === 'function') {
+      vis.setValue('${ns}.tools.refreshNow', true);
+      return;
+    }
+    if (window.vis && vis.conn && typeof vis.conn.setState === 'function') {
+      vis.conn.setState('${ns}.tools.refreshNow', true);
+      return;
+    }
+    console.log('ChargePoint refresh not available in this context');
+  } catch(e) {
+    console.log('ChargePoint refresh error', e);
+  }
+}
+</script>`;
+    }
+
     renderStationsHtmlMobile(prefixes, allStates) {
         const esc = (v) => (v === null || v === undefined) ? '' : String(v)
             .replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;');
@@ -1599,8 +1625,10 @@ async cleanupObsoleteStations(currentPrefixes) {
         };
 
         const updated = new Date().toLocaleString('de-DE');
+        const refreshButton = this.renderVisRefreshButtonHtml();
         let out = `
 <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;font-size:16px;">
+  ${refreshButton}
   <div style="display:flex;align-items:flex-end;justify-content:space-between;margin-bottom:10px;">
     <div style="font-weight:900;font-size:18px;">⚡ ChargePoint</div>
     <div style="opacity:.7;font-size:12px;">${esc(updated)}</div>
@@ -1830,8 +1858,10 @@ async cleanupObsoleteStations(currentPrefixes) {
         };
 
         const updated = new Date().toLocaleString('de-DE');
+        const refreshButton = this.renderVisRefreshButtonHtml();
         let out = `
 <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;font-size:14px;">
+  ${refreshButton}
   <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
     <div style="font-weight:800;font-size:16px;">⚡ ChargePoint</div>
     <div style="opacity:.75;font-size:12px;">Update: ${esc(updated)}</div>
