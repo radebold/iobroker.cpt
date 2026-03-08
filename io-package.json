@@ -9,7 +9,7 @@
     },
     "desc": {
       "en": "Adapter for ChargePoint charging stations status",
-      "de": "Adapter für den Status von ChargePoint-Ladestationen"
+      "de": "Adapter f\u00fcr den Status von ChargePoint-Ladestationen"
     },
     "authors": [
       "radebold <radebold@gmail.com>"
@@ -64,5 +64,5 @@
   "encryptedNative": [],
   "objects": [],
   "instanceObjects": [],
-  "version": "0.6.36"
+  "version": "0.7.6.1"
 }
