@@ -5,8 +5,8 @@
     "main": {
       "type": "panel",
       "label": {
-        "en": "Stations",
-        "de": "Stationen"
+        "de": "Stationen",
+        "en": "Stations"
       },
       "items": {
         "interval": {
@@ -72,6 +72,19 @@
                 "de": "Device ID (P2, optional)"
               },
               "width": 180
+            },
+            {
+              "type": "sendTo",
+              "attr": "_test",
+              "title": {
+                "en": "Test",
+                "de": "Test"
+              },
+              "width": 80,
+              "variant": "outlined",
+              "icon": "send",
+              "command": "testStation",
+              "jsonData": "{\"name\":\"${data.name}\",\"deviceId1\":\"${data.deviceId1}\",\"deviceId2\":\"${data.deviceId2}\"}"
             }
           ],
           "addRow": true,
@@ -82,84 +95,275 @@
     "communication": {
       "type": "panel",
       "label": {
-        "en": "Communication",
-        "de": "Kommunikation"
+        "de": "Kommunikation",
+        "en": "Communication"
       },
       "items": {
-        "_hint": {
-          "type": "staticText",
-          "text": {
-            "en": "Pick an enabled instance. Tip: type 'telegram', 'whatsapp-cmb' or 'pushover' in the dropdown to filter quickly. Other instances will be ignored by the adapter.",
-            "de": "Wähle eine aktivierte Instanz. Tipp: im Dropdown einfach 'telegram', 'whatsapp-cmb' oder 'pushover' tippen, dann filtert die Liste sofort. Andere Instanzen werden vom Adapter ignoriert."
-          }
-        },
         "channels": {
           "type": "table",
           "label": {
-            "en": "Channels",
-            "de": "Kanäle"
+            "de": "Kanäle",
+            "en": "Channels"
           },
           "items": [
             {
               "type": "checkbox",
               "attr": "enabled",
               "title": {
-                "en": "Enabled",
-                "de": "Aktiv"
+                "de": "Aktiv",
+                "en": "Enabled"
               },
-              "width": 70,
-              "default": true
+              "default": true,
+              "width": 80
             },
             {
-              "type": "instance",
+              "type": "select",
               "attr": "instance",
               "title": {
-                "en": "Adapter instance",
-                "de": "Adapter-Instanz"
+                "de": "Instanz",
+                "en": "Instance"
               },
-              "width": 220,
-              "onlyEnabled": true,
-              "long": false
+              "options": [
+                {
+                  "label": "telegram.0",
+                  "value": "telegram.0"
+                },
+                {
+                  "label": "whatsapp-cmb.0",
+                  "value": "whatsapp-cmb.0"
+                },
+                {
+                  "label": "pushover.0",
+                  "value": "pushover.0"
+                },
+                {
+                  "label": "open-wa.0",
+                  "value": "open-wa.0"
+                }
+              ],
+              "width": 160
             },
             {
               "type": "text",
               "attr": "user",
               "title": {
-                "en": "Recipient",
-                "de": "Empfänger"
+                "de": "Empfänger",
+                "en": "Recipient"
               },
-              "width": 170,
-              "placeholder": "+4917... / Thomas",
-              "disabled": "data.instance && data.instance.startsWith('pushover.')",
-              "hidden": false
+              "width": 180
             },
             {
               "type": "text",
               "attr": "label",
               "title": {
-                "en": "Label",
-                "de": "Name"
+                "de": "Name",
+                "en": "Name"
               },
-              "width": 200,
-              "placeholder": "Privat / Familie"
+              "width": 140
             },
             {
               "type": "sendTo",
-              "attr": "_test",
-              "title": {
-                "en": "Test",
-                "de": "Test"
-              },
-              "width": 90,
-              "variant": "contained",
-              "icon": "send",
               "command": "testChannel",
-              "jsonData": "{\"instance\":\"${data.instance}\",\"user\":\"${data.user}\",\"label\":\"${data.label}\"}"
+              "icon": "send",
+              "variant": "outlined",
+              "width": 80,
+              "tooltip": {
+                "de": "Test senden",
+                "en": "Send test"
+              },
+              "attr": "_test",
+              "jsonData": "{\"instance\":\"${data.instance}\",\"user\":\"${data.user}\",\"label\":\"${data.label}\"}",
+              "title": {
+                "de": "Test",
+                "en": "Test"
+              }
             }
-          ],
-          "addRow": true,
-          "deleteRow": true,
-          "compact": true
+          ]
+        }
+      }
+    },
+    "subscriptions": {
+      "type": "panel",
+      "label": {
+        "de": "Abos",
+        "en": "Subscriptions"
+      },
+      "items": {
+        "subscriptions": {
+          "type": "table",
+          "label": {
+            "de": "Benachrichtigungs-Abos",
+            "en": "Notification subscriptions"
+          },
+          "items": [
+            {
+              "type": "checkbox",
+              "attr": "enabled",
+              "title": {
+                "de": "Aktiv",
+                "en": "Enabled"
+              },
+              "default": true,
+              "width": 80
+            },
+            {
+              "type": "selectSendTo",
+              "attr": "station",
+              "title": {
+                "de": "Station",
+                "en": "Station"
+              },
+              "command": "getStations",
+              "manual": false,
+              "width": 260
+            },
+            {
+              "type": "selectSendTo",
+              "attr": "recipient",
+              "title": {
+                "de": "Empfänger",
+                "en": "Recipient"
+              },
+              "command": "getRecipients",
+              "manual": false,
+              "width": 200
+            }
+          ]
+        }
+      }
+    },
+    "car": {
+      "type": "panel",
+      "label": {
+        "de": "Auto",
+        "en": "Car"
+      },
+      "items": {
+        "carLatStateId": {
+          "type": "text",
+          "label": {
+            "de": "State-ID Latitude (extern)",
+            "en": "Latitude state id (foreign)"
+          },
+          "help": {
+            "de": "Optional: Datenpunkt mit Latitude deines Autos (z. B. aus Home Assistant / Tesla / etc.).",
+            "en": "Optional: data point containing your car latitude."
+          }
+        },
+        "carLonStateId": {
+          "type": "text",
+          "label": {
+            "de": "State-ID Longitude (extern)",
+            "en": "Longitude state id (foreign)"
+          },
+          "help": {
+            "de": "Optional: Datenpunkt mit Longitude deines Autos.",
+            "en": "Optional: data point containing your car longitude."
+          }
+        },
+        "carSocStateId": {
+          "type": "text",
+          "label": {
+            "de": "State-ID Ladestand (SoC %) (extern)",
+            "en": "SoC state id (percent) (foreign)"
+          },
+          "help": {
+            "de": "Optional: Datenpunkt mit Ladestand in Prozent (z. B. 23.5). Wird für Benachrichtigungs-Filter genutzt.",
+            "en": "Optional: data point containing state of charge in percent. Used for notification filters."
+          }
+        },
+        "carLat": {
+          "type": "number",
+          "label": {
+            "de": "Latitude (statisch)",
+            "en": "Latitude (static)"
+          },
+          "help": {
+            "de": "Optional: Feste Latitude. Wird als initialer Wert genutzt, wenn gesetzt.",
+            "en": "Optional: Static latitude. Used as initial value if set."
+          }
+        },
+        "carLon": {
+          "type": "number",
+          "label": {
+            "de": "Longitude (statisch)",
+            "en": "Longitude (static)"
+          },
+          "help": {
+            "de": "Optional: Feste Longitude. Wird als initialer Wert genutzt, wenn gesetzt.",
+            "en": "Optional: Static longitude. Used as initial value if set."
+          }
+        },
+        "notifySocBelow": {
+          "type": "number",
+          "min": 0,
+          "max": 100,
+          "default": 0,
+          "label": {
+            "de": "Notify nur bei SoC < (%) (0 = aus)",
+            "en": "Notify only if SoC < (%) (0 = off)"
+          },
+          "help": {
+            "de": "Optionaler Filter. 0 = deaktiviert. Nur anwenden, wenn ein SoC-Datenpunkt vorhanden ist.",
+            "en": "Optional filter. 0 = disabled. Applied only when a car SoC source is available."
+          }
+        },
+        "notifyMaxDistanceM": {
+          "type": "number",
+          "min": 0,
+          "default": 0,
+          "label": {
+            "de": "Notify nur bei Distanz <= (m) (0 = aus)",
+            "en": "Notify only if distance <= (m) (0 = off)"
+          },
+          "help": {
+            "de": "Optionaler Filter. 0 = deaktiviert. Wird nur angewendet, wenn Auto-Lat/Lon verfügbar sind.",
+            "en": "Optional filter. 0 = disabled. Applied only when car lat/lon are available."
+          }
+        },
+        "notifyCooldownMin": {
+          "type": "number",
+          "min": 0,
+          "default": 15,
+          "label": {
+            "de": "Notify Cooldown (Minuten)",
+            "en": "Notify cooldown (minutes)"
+          },
+          "help": {
+            "de": "Mindestabstand zwischen zwei Benachrichtigungen pro Station. 0 = kein Cooldown.",
+            "en": "Minimum time between notifications per station. 0 = no cooldown."
+          }
+        },
+        "nearestType2Enabled": {
+          "type": "checkbox",
+          "default": false,
+          "label": {
+            "de": "Nächste freie Typ2-Station suchen",
+            "en": "Search nearest available Type2"
+          },
+          "help": {
+            "de": "Ermittelt anhand der Auto-GPS-Position die nächste freie Typ2-Ladestation (ChargePoint Map API).",
+            "en": "Uses car GPS position to find the nearest available Type2 charging station (ChargePoint Map API)."
+          }
+        },
+        "nearestRadiusM": {
+          "type": "number",
+          "min": 100,
+          "default": 2000,
+          "label": {
+            "de": "Suchradius (Meter)",
+            "en": "Search radius (meters)"
+          }
+        },
+        "nearestPageSize": {
+          "type": "number",
+          "min": 1,
+          "max": 50,
+          "default": 10,
+          "label": {
+            "de": "Max. Ergebnisse",
+            "en": "Max results"
+          }
         }
       }
     }

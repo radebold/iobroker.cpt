@@ -1,0 +1,10 @@
+{
+  "title": "cpt mobile refresh button",
+  "widget": "basic - Button",
+  "label": "🔄 Refresh",
+  "datapoint": "cpt.0.tools.refreshNow",
+  "clickValue": true,
+  "toggle": false,
+  "position": "top right",
+  "notes": "Adapter resets the trigger automatically after refresh."
+}
