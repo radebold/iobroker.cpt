@@ -1,7 +1,7 @@
 {
   "common": {
     "name": "cpt",
-    "version": "0.7.4",
+    "version": "0.7.6",
     "title": "CPT ChargePoint",
     "titleLang": {
       "en": "CPT ChargePoint",
@@ -51,8 +51,8 @@
     "carSocStateId": "",
     "carLat": "",
     "carLon": "",
-    "notifySocBelow": 0,
-    "notifyMaxDistanceM": 0,
+    "notifySocBelow": 30,
+    "notifyMaxDistanceM": 500,
     "visHtmlMobileObjectId": "0_userdata.0.Vis.ChargePoint.htmlStationsMobile",
     "visHtmlMobileEnabled": true,
     "notifyCooldownMin": 15,
@@ -64,5 +64,5 @@
   "encryptedNative": [],
   "objects": [],
   "instanceObjects": [],
-  "version": "0.7.5"
+  "version": "0.6.36"
 }

@@ -100,18 +100,8 @@ class CptAdapter extends utils.Adapter {
         return s || 'unknown';
     }
 
-    getPortOccupancyStatus(port) {
-        // Use the classic ChargePoint status for logic first.
-        // statusV2 is kept for UI detail, but must not override availability logic.
-        return this.normalizeStatus(port?.status || port?.statusV2);
-    }
-
-    getPortUiStatus(port) {
-        return this.normalizeStatus(port?.statusV2 || port?.status);
-    }
-
     deriveStationStatusFromPorts(ports) {
-        const statuses = (Array.isArray(ports) ? ports : []).map((p) => this.getPortOccupancyStatus(p));
+        const statuses = (Array.isArray(ports) ? ports : []).map((p) => this.normalizeStatus(p?.statusV2 || p?.status));
         // Priority for UI:
         // - available: at least one free connector
         // - in_use: no free connector, but at least one is occupied/charging
@@ -257,19 +247,6 @@ class CptAdapter extends utils.Adapter {
 
     // ---------- Messaging ----------
 
-    async dispatchChannelMessage(inst, payload) {
-        const isTelegram = inst.startsWith('telegram.');
-        const isWhatsAppCmb = inst.startsWith('whatsapp-cmb.');
-        const isOpenWa = inst.startsWith('open-wa.');
-        const isPushover = inst.startsWith('pushover.');
-
-        if (isTelegram || isWhatsAppCmb || isOpenWa || isPushover) {
-            this.sendTo(inst, 'send', payload);
-            return;
-        }
-        this.sendTo(inst, payload);
-    }
-
     async sendMessageToChannels(text, ctx = {}) {
         const channels = this.getActiveChannels(ctx);
         if (!channels.length) {
@@ -320,7 +297,7 @@ class CptAdapter extends utils.Adapter {
             Object.keys(payload).forEach((k) => payload[k] === undefined && delete payload[k]);
 
             try {
-                await this.dispatchChannelMessage(inst, payload);
+                this.sendTo(inst, 'send', payload);
                 ok++;
                 this.log.info(`Message gesendet über ${inst}${lbl ? ' (' + lbl + ')' : ''}`);
             } catch (e) {
@@ -353,12 +330,10 @@ class CptAdapter extends utils.Adapter {
         // If nothing matches, do nothing (subscriptions define recipients)
         if (!matches.length) return { ok: 0, failed: 0, note: 'no_subscriptions' };
 
-        let ok = 0;
-        let failed = 0;
         for (const s of matches) {
             const recipientLabel = (s.recipient || '').toString().trim();
             if (!recipientLabel) continue;
-            const res = await this.sendAvailableNotification({
+            await this.sendAvailableNotification({
                 isTest,
                 station: stationName,
                 city,
@@ -366,10 +341,8 @@ class CptAdapter extends utils.Adapter {
                 portCount,
                 onlyLabel: recipientLabel,
             });
-            ok += Number(res?.ok || 0);
-            failed += Number(res?.failed || 0);
         }
-        return { ok, failed, note: 'subscriptions' };
+        return { ok: matches.length, failed: 0, note: 'subscriptions' };
     }
 
     async sendTestNotifyForPrefix(stationPrefixRel) {
@@ -457,7 +430,7 @@ class CptAdapter extends utils.Adapter {
 
         await this.setObjectNotExistsAsync('tools.lastRefreshResult', {
             type: 'state',
-            common: { name: 'Ergebnis letzte manuelle Aktualisierung', type: 'string', role: 'text', read: true, write: false },
+            common: { name: 'Ergebnis der manuellen Aktualisierung', type: 'string', role: 'text', read: true, write: false },
             native: {},
         });
 
@@ -725,7 +698,7 @@ class CptAdapter extends utils.Adapter {
                     const portsArr = Array.isArray(st?.ports) ? st.ports : [];
                     const freePorts = Number.isFinite(parseNumberLocale(st?.free_ports ?? st?.freePorts))
                         ? parseNumberLocale(st?.free_ports ?? st?.freePorts)
-                        : portsArr.filter(p => String(p?.status ?? p?.status_v2 ?? p?.statusV2).toLowerCase() === 'available').length;
+                        : portsArr.filter(p => String(p?.status_v2 ?? p?.statusV2 ?? p?.status).toLowerCase() === 'available').length;
 
                     // must have at least one available port
                     if (!(Number(freePorts) > 0)) continue;
@@ -786,7 +759,7 @@ class CptAdapter extends utils.Adapter {
             const portsArr = Array.isArray(nearest.ports) ? nearest.ports : [];
             const freePorts = Number.isFinite(parseNumberLocale(nearest.free_ports ?? nearest.freePorts))
                 ? parseNumberLocale(nearest.free_ports ?? nearest.freePorts)
-                : portsArr.filter(p => String(p?.status ?? p?.status_v2 ?? p?.statusV2).toLowerCase() === 'available').length;
+                : portsArr.filter(p => String(p?.status_v2 ?? p?.statusV2 ?? p?.status).toLowerCase() === 'available').length;
             const portCount = Number.isFinite(parseNumberLocale(nearest.total_port_count ?? nearest.portCount))
                 ? parseNumberLocale(nearest.total_port_count ?? nearest.portCount)
                 : (Number.isFinite(parseNumberLocale(nearest.total_port_count)) ? parseNumberLocale(nearest.total_port_count) : portsArr.length);
@@ -860,14 +833,13 @@ class CptAdapter extends utils.Adapter {
     }
 
     async passesNotifyFilters(stationPrefixRel) {
-        const res = { ok: true, socOk: true, distanceOk: true, soc: this.carSoc, distanceM: null, socSkipped: false, distanceSkipped: false };
+        const res = { ok: true, socOk: true, distanceOk: true, soc: this.carSoc, distanceM: null };
 
         const socTh = Number(this.notifySocBelow);
-        const socFilterConfigured = Number.isFinite(socTh) && socTh > 0;
-        if (socFilterConfigured) {
+        if (Number.isFinite(socTh)) {
             if (typeof this.carSoc !== 'number' || !Number.isFinite(this.carSoc)) {
-                // Do not block notifications when no SoC source is configured / available.
-                res.socSkipped = true;
+                res.ok = false;
+                res.socOk = false;
             } else {
                 res.socOk = this.carSoc < socTh;
                 res.ok = res.ok && res.socOk;
@@ -875,14 +847,13 @@ class CptAdapter extends utils.Adapter {
         }
 
         const distMax = Number(this.notifyMaxDistanceM);
-        const distanceFilterConfigured = Number.isFinite(distMax) && distMax > 0;
-        if (distanceFilterConfigured) {
+        if (Number.isFinite(distMax)) {
             const st = await this.getStateAsync(`${stationPrefixRel}.distance.m`).catch(() => null);
             const d = st && st.val !== undefined && st.val !== null ? Number(st.val) : NaN;
             res.distanceM = Number.isFinite(d) ? d : null;
             if (!Number.isFinite(d)) {
-                // Do not block notifications when no car position is configured / available.
-                res.distanceSkipped = true;
+                res.ok = false;
+                res.distanceOk = false;
             } else {
                 res.distanceOk = d <= distMax;
                 res.ok = res.ok && res.distanceOk;
@@ -912,11 +883,6 @@ class CptAdapter extends utils.Adapter {
         const enter = Number(this.notifyMaxDistanceM);
         if (!Number.isFinite(enter) || enter <= 0) return null;
         return Math.round(enter * 1.1); // 500 -> 550
-    }
-
-    isDistanceFilterConfigured() {
-        const enter = Number(this.notifyMaxDistanceM);
-        return Number.isFinite(enter) && enter > 0;
     }
 
     async computeInRange(stationPrefixRel) {
@@ -962,36 +928,29 @@ class CptAdapter extends utils.Adapter {
     async attemptNotifyForStation({ stationPrefixRel, city, stationName, freePorts, portCount, reason }) {
         const meta = this.getNotifyMeta(stationPrefixRel);
 
+        const posKey = this.getCarPosKey();
+
         // Reset notified when station is not free anymore
         if (!(Number(freePorts) > 0)) {
             meta.notifiedPosKey = null;
-            meta.lastSent = 0;
             return;
         }
 
-        // Use a synthetic key when no car position is available so notifications still work
-        // without optional GPS data.
-        const posKey = this.getCarPosKey() || '__nopos__';
+        // Require a stable car position (needed for distance filter + "notify again only after position changed")
+        if (!posKey) return;
 
         // Only one notification per free phase AND car position key
         if (meta.notifiedPosKey && meta.notifiedPosKey === posKey) return;
 
-        // Respect cooldown (also applies for __nopos__).
-        const cooldownMin = Number(this.notifyCooldownMin);
-        if (Number.isFinite(cooldownMin) && cooldownMin > 0 && meta.lastSent) {
-            const minDeltaMs = cooldownMin * 60 * 1000;
-            if ((Date.now() - meta.lastSent) < minDeltaMs) return;
-        }
-
+        // Station toggle OR subscriptions decide whether station is relevant
         const notifyState = await this.getStateAsync(`${stationPrefixRel}.notifyOnAvailable`).catch(() => null);
         const notifyEnabled = notifyState?.val === true;
         const hasSubs = this.stationHasNotifyTarget(stationPrefixRel, stationName);
 
-        if (!notifyEnabled || !hasSubs) {
-            this.log.debug(`Notify übersprungen (${reason}): ${stationName} (${city}) – notifyEnabled=${notifyEnabled} hasSubs=${hasSubs}`);
-            return;
-        }
+        // New rule: Station must have Notify enabled AND there must be at least one matching subscription
+        if (!notifyEnabled || !hasSubs) return;
 
+        // Filters: SoC + distance must be determinable and pass
         const f = await this.passesNotifyFilters(stationPrefixRel);
         if (!f.ok) {
             const reasons = [];
@@ -1001,18 +960,10 @@ class CptAdapter extends utils.Adapter {
             return;
         }
 
-        const res = await this.notifySubscribers({ stationPrefixRel, city, stationName, freePorts, portCount, isTest: false });
-        if (Number(res?.ok || 0) > 0) {
-            meta.notifiedPosKey = posKey;
-            meta.lastSent = Date.now();
-            const filterInfo = [
-                f.socSkipped ? 'SoC-Filter übersprungen' : `SoC=${f.soc ?? 'n/a'}%`,
-                f.distanceSkipped ? 'Distanz-Filter übersprungen' : `dist=${f.distanceM ?? 'n/a'}m`,
-            ].join(', ');
-            this.log.info(`Notify (${reason}): ${stationName} (${city}) freePorts=${freePorts}/${portCount} [${filterInfo}]`);
-        } else {
-            this.log.warn(`Notify ohne Versand (${reason}): ${stationName} (${city}) – keine passenden aktiven Empfänger gefunden`);
-        }
+        await this.notifySubscribers({ stationPrefixRel, city, stationName, freePorts, portCount, isTest: false });
+        meta.notifiedPosKey = posKey;
+        meta.lastSent = Date.now();
+        this.log.info(`Notify (${reason}): ${stationName} (${city}) freePorts=${freePorts}/${portCount} (SoC=${f.soc ?? 'n/a'}%, dist=${f.distanceM ?? 'n/a'}m)`);
     }
 
     
@@ -1131,30 +1082,6 @@ class CptAdapter extends utils.Adapter {
         return Array.isArray(data1?.portsInfo?.ports) ? data1.portsInfo.ports : [];
     }
 
-    getConfiguredStations() {
-        const stations = (Array.isArray(this.config.stations) ? this.config.stations : [])
-            .filter((s) => s && typeof s === 'object')
-            .map((s, idx) => {
-                const deviceId1 = s.deviceId1 ?? s.stationId ?? s.deviceId ?? s.id;
-                const deviceId2 = s.deviceId2 ?? null;
-                const name = s.name || `station_${deviceId1 || idx + 1}`;
-                const enabled = (s.enabled == undefined || s.enabled == null) ? true : isTrue(s.enabled);
-                return {
-                    name,
-                    enabled,
-                    notifyOnAvailable: s.notifyOnAvailable === true,
-                    deviceId1: deviceId1 ? Number(deviceId1) : null,
-                    deviceId2: deviceId2 ? Number(deviceId2) : null,
-                };
-            })
-            .filter((s) => !!s.deviceId1);
-
-        return stations.filter((s) => {
-            if (s.enabled === undefined || s.enabled === null || s.enabled === '') return true;
-            return isTrue(s.enabled);
-        });
-    }
-
     async updateAllStations(stations) {
         const currentPrefixes = new Set();
         for (const st of stations) {
@@ -1199,7 +1126,7 @@ class CptAdapter extends utils.Adapter {
 
             const ports = this.buildLogicalPorts(data1, data2, !!st.deviceId2);
             const portCount = st.deviceId2 ? 2 : ports.length;
-            const freePorts = ports.reduce((acc, p) => acc + (this.getPortOccupancyStatus(p) === 'available' ? 1 : 0), 0);
+            const freePorts = ports.reduce((acc, p) => acc + (this.normalizeStatus(p?.statusV2 || p?.status) === 'available' ? 1 : 0), 0);
             const derived = this.deriveStationStatusFromPorts(ports);
 
             // validity check: hide stations with incomplete base data (e.g. missing city/gps/ports)
@@ -1222,11 +1149,6 @@ class CptAdapter extends utils.Adapter {
 
 
             let anyPortBecameAvailable = false;
-            const prevFreePortsState = await this.getStateAsync(`${stationPrefix}.freePorts`).catch(() => null);
-            const prevFreePorts = prevFreePortsState && prevFreePortsState.val !== undefined && prevFreePortsState.val !== null
-                ? Number(prevFreePortsState.val)
-                : null;
-            const stationBecameAvailable = !(Number(prevFreePorts) > 0) && Number(freePorts) > 0;
 
             await this.updateStateIfChanged(`${stationPrefix}.portCount`, portCount);
             await this.updateStateIfChanged(`${stationPrefix}.freePorts`, freePorts);
@@ -1241,7 +1163,7 @@ class CptAdapter extends utils.Adapter {
                 const portPrefix = await this.ensurePortObjects(stationPrefix, outletNumber);
 
                 // detect transition to "available" per port (for notifications)
-                const curStatusNorm = this.getPortOccupancyStatus(port);
+                const curStatusNorm = this.normalizeStatus(port?.statusV2 || port?.status);
                 const cacheKey = `${stationPrefix}|${outletNumber}`;
                 const prevStatusNorm = this.lastPortStatusByKey[cacheKey];
                 if (prevStatusNorm !== undefined && prevStatusNorm !== 'available' && curStatusNorm === 'available') {
@@ -1265,19 +1187,15 @@ class CptAdapter extends utils.Adapter {
             }
 
             // notify logic: when any port transitions to "available"
-            // plus a station-level fallback when freePorts changes from 0 to >0
-            if (anyPortBecameAvailable || stationBecameAvailable) {
+            if (anyPortBecameAvailable) {
                 await this.attemptNotifyForStation({
                     stationPrefixRel: stationPrefix,
                     city,
                     stationName: st.name,
                     freePorts,
                     portCount,
-                    reason: anyPortBecameAvailable ? 'portAvailable' : 'stationAvailable',
+                    reason: 'portAvailable',
                 });
-
-                // Update nearest free station immediately after a free transition.
-                this.scheduleNearestType2Update(anyPortBecameAvailable ? 'portAvailable' : 'stationAvailable');
             }
 
             this.scheduleVisHtmlUpdate('state change');
@@ -1404,26 +1322,6 @@ async cleanupObsoleteStations(currentPrefixes) {
                 const info = this.stationInfoByPrefix[prefix] || {};
                 const portCountSt = await this.getStateAsync(`${prefix}.portCount`).catch(() => null);
                 const portCount = portCountSt?.val !== undefined ? Number(portCountSt.val) : undefined;
-
-                // Geo-entry handling (only when a distance filter is configured)
-                if (this.isDistanceFilterConfigured()) {
-                    const range = await this.computeInRange(prefix);
-                    if (range.exited) {
-                        // Allow a new notification when re-entering the radius
-                        this.getNotifyMeta(prefix).notifiedPosKey = null;
-                    }
-                    if (range.entered) {
-                        await this.attemptNotifyForStation({
-                            stationPrefixRel: prefix,
-                            city: info.city || prefix.split('.')[1] || '',
-                            stationName: info.name || prefix.split('.').pop(),
-                            freePorts,
-                            portCount,
-                            reason: 'geoEntry',
-                        });
-                        continue; // geoEntry is the most explicit trigger
-                    }
-                }
 
                 await this.attemptNotifyForStation({
                     stationPrefixRel: prefix,
@@ -1599,15 +1497,19 @@ async cleanupObsoleteStations(currentPrefixes) {
         };
 
         const updated = new Date().toLocaleString('de-DE');
-        const refreshBtn = `<button onclick="var b=this;try{b.disabled=true;b.style.background='#6b7280';b.style.cursor='wait';b.dataset.txt=b.innerHTML;b.innerHTML='⏳ Aktualisiere...';if(window.vis && typeof vis.setValue==='function'){ vis.setValue('${this.namespace}.tools.refreshNow', true); } else if(window.vis && vis.conn && typeof vis.conn.setState==='function'){ vis.conn.setState('${this.namespace}.tools.refreshNow', true); }}catch(e){ console.log('ChargePoint refresh failed', e); } setTimeout(function(){ try{b.disabled=false;b.style.background='#2b8cff';b.style.cursor='pointer';b.innerHTML='🔄 Refresh';}catch(_e){} }, 4000);" style="background:#2b8cff;border:none;color:#fff;padding:8px 12px;border-radius:10px;font-size:13px;font-weight:800;cursor:pointer;white-space:nowrap;transition:all .2s ease;">🔄 Refresh</button>`;
+        const refreshStateId = `${this.namespace}.tools.refreshNow`;
         let out = `
 <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;font-size:16px;">
-  <div style="display:flex;align-items:flex-end;justify-content:space-between;gap:10px;margin-bottom:10px;">
-    <div style="font-weight:900;font-size:18px;">⚡ ChargePoint</div>
-    <div style="display:flex;align-items:center;gap:8px;">
+  <style>
+    .cpRefreshBtn{background:#2b8cff;border:none;color:#fff;padding:8px 12px;border-radius:10px;font-size:13px;font-weight:800;cursor:pointer;}
+    .cpRefreshBtn:active{transform:scale(.97);background:#1d6fe0;}
+  </style>
+  <div style="display:flex;align-items:flex-end;justify-content:space-between;margin-bottom:10px;gap:8px;">
+    <div>
+      <div style="font-weight:900;font-size:18px;">⚡ ChargePoint</div>
       <div style="opacity:.7;font-size:12px;">${esc(updated)}</div>
-      ${refreshBtn}
     </div>
+    <button class="cpRefreshBtn" onclick="(function(){try{if(window.vis&&typeof vis.setValue==='function'){vis.setValue('${refreshStateId}', true);}else if(window.vis&&vis.conn&&typeof vis.conn.setState==='function'){vis.conn.setState('${refreshStateId}', true);}}catch(e){console.log('ChargePoint refresh error',e);}})()">🔄 Refresh</button>
   </div>
 
   ${(() => {
@@ -1834,16 +1736,19 @@ async cleanupObsoleteStations(currentPrefixes) {
         };
 
         const updated = new Date().toLocaleString('de-DE');
-        const refreshBtn = `<button onclick="var b=this;try{b.disabled=true;b.style.background='#6b7280';b.style.cursor='wait';b.dataset.txt=b.innerHTML;b.innerHTML='⏳ Aktualisiere...';if(window.vis && typeof vis.setValue==='function'){ vis.setValue('${this.namespace}.tools.refreshNow', true); } else if(window.vis && vis.conn && typeof vis.conn.setState==='function'){ vis.conn.setState('${this.namespace}.tools.refreshNow', true); }}catch(e){ console.log('ChargePoint refresh failed', e); } setTimeout(function(){ try{b.disabled=false;b.style.background='#2b8cff';b.style.cursor='pointer';b.innerHTML='🔄 Refresh';}catch(_e){} }, 4000);" style="background:#2b8cff;border:none;color:#fff;padding:6px 10px;border-radius:8px;font-size:12px;font-weight:800;cursor:pointer;white-space:nowrap;transition:all .2s ease;">🔄 Refresh</button>`;
+        const refreshStateId = `${this.namespace}.tools.refreshNow`;
         let out = `
 <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;font-size:14px;">
-  <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:10px;">
-    <div style="font-weight:800;font-size:16px;">⚡ ChargePoint</div>
-    <div style="display:flex;align-items:center;gap:8px;">
-      <div style="opacity:.75;font-size:12px;">Update: ${esc(updated)}</div>
-      ${refreshBtn}
+  <style>
+    .cpRefreshBtn{background:#2b8cff;border:none;color:#fff;padding:7px 12px;border-radius:10px;font-size:12px;font-weight:800;cursor:pointer;}
+    .cpRefreshBtn:active{transform:scale(.97);background:#1d6fe0;}
+  </style>
+  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;gap:8px;">
+    <div style="display:flex;align-items:center;gap:10px;min-width:0;">
+      <div style="font-weight:800;font-size:16px;white-space:nowrap;">⚡ ChargePoint</div>
+      <div style="opacity:.75;font-size:12px;white-space:nowrap;">Update: ${esc(updated)}</div>
     </div>
-  </div>
+    <button class="cpRefreshBtn" onclick="(function(){try{if(window.vis&&typeof vis.setValue==='function'){vis.setValue('${refreshStateId}', true);}else if(window.vis&&vis.conn&&typeof vis.conn.setState==='function'){vis.conn.setState('${refreshStateId}', true);}}catch(e){console.log('ChargePoint refresh error',e);}})()">🔄 Refresh</button>
 
   ${(() => {
       const nName  = getVal('nearestType2.name') ?? '';
@@ -1975,7 +1880,52 @@ async cleanupObsoleteStations(currentPrefixes) {
         return out;
     }
 
-async onReady() {
+    getConfiguredStations() {
+        const stations = (Array.isArray(this.config.stations) ? this.config.stations : [])
+            .filter((s) => s && typeof s === 'object')
+            .map((s, idx) => {
+                const deviceId1 = s.deviceId1 ?? s.stationId ?? s.deviceId ?? s.id;
+                const deviceId2 = s.deviceId2 ?? null;
+                const name = s.name || `station_${deviceId1 || idx + 1}`;
+                const enabled = (s.enabled == undefined || s.enabled == null) ? true : isTrue(s.enabled);
+                return {
+                    name,
+                    enabled,
+                    notifyOnAvailable: s.notifyOnAvailable === true,
+                    deviceId1: deviceId1 ? Number(deviceId1) : null,
+                    deviceId2: deviceId2 ? Number(deviceId2) : null,
+                };
+            })
+            .filter((s) => !!s.deviceId1);
+
+        return stations.filter((s) => {
+            if (s.enabled === undefined || s.enabled === null || s.enabled === '') return true;
+            return isTrue(s.enabled);
+        });
+    }
+
+    async runManualRefresh() {
+        const started = new Date().toISOString();
+        try {
+            const enabledStations = this.getConfiguredStations();
+            if (!enabledStations.length) {
+                await this.setStateAsync('tools.lastRefresh', { val: started, ack: true });
+                await this.setStateAsync('tools.lastRefreshResult', { val: 'Keine aktiven Stationen konfiguriert', ack: true });
+                return;
+            }
+            await this.updateAllStations(enabledStations);
+            this.scheduleVisHtmlUpdate('manual-refresh');
+            await this.setStateAsync('tools.lastRefresh', { val: started, ack: true });
+            await this.setStateAsync('tools.lastRefreshResult', { val: 'ok', ack: true });
+        } catch (e) {
+            const msg = e?.message || String(e);
+            await this.setStateAsync('tools.lastRefresh', { val: started, ack: true });
+            await this.setStateAsync('tools.lastRefreshResult', { val: `Fehler: ${msg}`, ack: true });
+            throw e;
+        }
+    }
+
+    async onReady() {
         this.log.info('Adapter CPT gestartet');
 
         // Refresh config-derived car settings (do not rely on constructor-time cache)
@@ -1986,8 +1936,8 @@ async onReady() {
         this.carLatStatic = (this.config && this.config.carLat !== undefined && this.config.carLat !== null && this.config.carLat !== '') ? Number(this.config.carLat) : null;
         this.carLonStatic = (this.config && this.config.carLon !== undefined && this.config.carLon !== null && this.config.carLon !== '') ? Number(this.config.carLon) : null;
 
-        this.notifySocBelow = (this.config && this.config.notifySocBelow !== undefined && this.config.notifySocBelow !== null && this.config.notifySocBelow !== '') ? Number(this.config.notifySocBelow) : 0;
-        this.notifyMaxDistanceM = (this.config && this.config.notifyMaxDistanceM !== undefined && this.config.notifyMaxDistanceM !== null && this.config.notifyMaxDistanceM !== '') ? Number(this.config.notifyMaxDistanceM) : 0;
+        this.notifySocBelow = (this.config && this.config.notifySocBelow !== undefined && this.config.notifySocBelow !== null && this.config.notifySocBelow !== '') ? Number(this.config.notifySocBelow) : 30;
+        this.notifyMaxDistanceM = (this.config && this.config.notifyMaxDistanceM !== undefined && this.config.notifyMaxDistanceM !== null && this.config.notifyMaxDistanceM !== '') ? Number(this.config.notifyMaxDistanceM) : 500;
         this.notifyCooldownMin = (this.config && this.config.notifyCooldownMin !== undefined && this.config.notifyCooldownMin !== null && this.config.notifyCooldownMin !== '') ? Number(this.config.notifyCooldownMin) : 15;
 
         this.log.debug(`Config (car): latId='${this.carLatStateId}' lonId='${this.carLonStateId}' socId='${this.carSocStateId}' latStatic=${this.carLatStatic} lonStatic=${this.carLonStatic} socBelow=${this.notifySocBelow} maxDistM=${this.notifyMaxDistanceM} cooldownMin=${this.notifyCooldownMin}`);
@@ -2004,7 +1954,6 @@ async onReady() {
         // initialize car position (static or from foreign)
         await this.initCarPosition();
         await this.initCarSoc();
-        // initial distance calc + nearest station (if car GPS is known)
         this.scheduleCarDistanceUpdate('initial');
         this.scheduleNearestType2Update('initial');
 
@@ -2016,21 +1965,19 @@ async onReady() {
         this.subscribeStates('stations.*.*.testNotify');
 
         const intervalMin = Number(this.config.interval) || 5;
-
-        const stations = (Array.isArray(this.config.stations) ? this.config.stations : [])
-            .filter((s) => s && typeof s === 'object');
         const enabledStations = this.getConfiguredStations();
+        const stations = enabledStations.slice();
 
         if (!enabledStations.length) {
-            if (!stations.length) {
-                this.log.warn('Keine gültigen Stationen konfiguriert');
-            } else {
-                this.log.warn('Keine aktiven Stationen konfiguriert (enabled=false)');
-            }
+            this.log.warn('Keine aktiven Stationen konfiguriert (enabled=false)');
             return;
         }
 
-        // create tree based on current city names
+        if (!stations.length) {
+            this.log.warn('Keine gültigen Stationen konfiguriert');
+            return;
+        }
+
         for (const st of enabledStations) {
             const data1 = await this.safeFetch(st.deviceId1);
             const data2 = st.deviceId2 ? await this.safeFetch(st.deviceId2) : null;
@@ -2044,8 +1991,6 @@ async onReady() {
         }
 
         await this.updateAllStations(enabledStations);
-
-        // initial VIS HTML write
         this.scheduleVisHtmlUpdate('initial');
 
         this.pollInterval = setInterval(() => {
@@ -2114,18 +2059,12 @@ async onReady() {
         }
 
         if (id === `${this.namespace}.tools.refreshNow` && state.val === true) {
-            const now = new Date().toISOString();
-            let result = 'ok';
             try {
-                const enabledStations = this.getConfiguredStations();
-                await this.updateAllStations(enabledStations);
-                this.log.info(`Manuelle Aktualisierung ausgeführt: ${enabledStations.length} Station(en)`);
+                await this.runManualRefresh();
+                this.log.info('Manuelle Aktualisierung erfolgreich');
             } catch (e) {
-                result = `Fehler: ${e.message}`;
-                this.log.warn(`Manuelle Aktualisierung fehlgeschlagen: ${e.message}`);
+                this.log.warn(`Manuelle Aktualisierung fehlgeschlagen: ${e?.message || e}`);
             } finally {
-                await this.setStateAsync('tools.lastRefresh', { val: now, ack: true });
-                await this.setStateAsync('tools.lastRefreshResult', { val: result, ack: true });
                 await this.setStateAsync('tools.refreshNow', { val: false, ack: true });
             }
             return;
@@ -2245,7 +2184,9 @@ async onReady() {
                 // IMPORTANT: log this action because sendTo itself is fire-and-forget
                 this.log.info(`Kommunikation-Test: instance=${instance}${user ? ` user=${user}` : ''}${label ? ` label=${label}` : ''}`);
 
-                await this.dispatchChannelMessage(instance, payload);
+                // open-wa uses a dedicated command; others usually accept the payload directly
+                if (isOpenWa) this.sendTo(instance, 'send', payload);
+                else this.sendTo(instance, payload);
 
                 this.log.info(`Kommunikation-Test: sendTo ausgelöst (${instance})`);
                 obj.callback && this.sendTo(obj.from, obj.command, { data: { result: `Test an ${instance} gesendet${user ? ' (' + user + ')' : ''}` } }, obj.callback);
