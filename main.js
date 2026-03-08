@@ -1567,34 +1567,6 @@ async cleanupObsoleteStations(currentPrefixes) {
 
 
     
-
-    getVisRefreshSnippet() {
-        return `
-<div style="display:flex;justify-content:flex-end;align-items:center;margin-bottom:10px;gap:8px;">
-  <button onclick="cptRefreshNow()" style="background:#2b8cff;border:none;color:#fff;padding:8px 12px;border-radius:10px;font-size:13px;font-weight:800;cursor:pointer;box-shadow:0 4px 10px rgba(0,0,0,.22);">🔄 Refresh</button>
-</div>
-<script>
-(function () {
-  window.cptRefreshNow = function () {
-    try {
-      if (window.vis && vis.conn && typeof vis.conn.setState === 'function') {
-        vis.conn.setState(${this.namespace}.tools.refreshNow', true);
-        return false;
-      }
-      if (window.vis && typeof vis.setValue === 'function') {
-        vis.setValue(${this.namespace}.tools.refreshNow', true);
-        return false;
-      }
-      console.log('ChargePoint refresh: vis API not available');
-    } catch (e) {
-      console.log('ChargePoint refresh failed', e);
-    }
-    return false;
-  };
-})();
-</script>`;
-    }
-
     renderStationsHtmlMobile(prefixes, allStates) {
         const esc = (v) => (v === null || v === undefined) ? '' : String(v)
             .replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;');
@@ -1627,13 +1599,15 @@ async cleanupObsoleteStations(currentPrefixes) {
         };
 
         const updated = new Date().toLocaleString('de-DE');
-        const refresh = this.getVisRefreshSnippet();
+        const refreshBtn = `<button onclick="try{ if(window.vis && typeof vis.setValue==='function'){ vis.setValue('${this.namespace}.tools.refreshNow', true); } else if(window.vis && vis.conn && typeof vis.conn.setState==='function'){ vis.conn.setState('${this.namespace}.tools.refreshNow', true); } }catch(e){ console.log('ChargePoint refresh failed', e); }" style="background:#2b8cff;border:none;color:#fff;padding:8px 12px;border-radius:10px;font-size:13px;font-weight:800;cursor:pointer;white-space:nowrap;">🔄 Refresh</button>`;
         let out = `
 <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;font-size:16px;">
-  ${refresh}
-  <div style="display:flex;align-items:flex-end;justify-content:space-between;margin-bottom:10px;">
+  <div style="display:flex;align-items:flex-end;justify-content:space-between;gap:10px;margin-bottom:10px;">
     <div style="font-weight:900;font-size:18px;">⚡ ChargePoint</div>
-    <div style="opacity:.7;font-size:12px;">${esc(updated)}</div>
+    <div style="display:flex;align-items:center;gap:8px;">
+      <div style="opacity:.7;font-size:12px;">${esc(updated)}</div>
+      ${refreshBtn}
+    </div>
   </div>
 
   ${(() => {
@@ -1860,13 +1834,16 @@ async cleanupObsoleteStations(currentPrefixes) {
         };
 
         const updated = new Date().toLocaleString('de-DE');
-        const refresh = this.getVisRefreshSnippet();
+        const refreshBtn = `<button onclick="try{ if(window.vis && typeof vis.setValue==='function'){ vis.setValue('${this.namespace}.tools.refreshNow', true); } else if(window.vis && vis.conn && typeof vis.conn.setState==='function'){ vis.conn.setState('${this.namespace}.tools.refreshNow', true); } }catch(e){ console.log('ChargePoint refresh failed', e); }" style="background:#2b8cff;border:none;color:#fff;padding:6px 10px;border-radius:8px;font-size:12px;font-weight:800;cursor:pointer;white-space:nowrap;">🔄 Refresh</button>`;
         let out = `
 <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;font-size:14px;">
-  ${refresh}
-  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
+  <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:10px;">
     <div style="font-weight:800;font-size:16px;">⚡ ChargePoint</div>
-    <div style="opacity:.75;font-size:12px;">Update: ${esc(updated)}</div>
+    <div style="display:flex;align-items:center;gap:8px;">
+      <div style="opacity:.75;font-size:12px;">Update: ${esc(updated)}</div>
+      ${refreshBtn}
+    </div>
+  </div>
 
   ${(() => {
       const nName  = getVal('nearestType2.name') ?? '';
