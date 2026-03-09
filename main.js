@@ -2,7 +2,6 @@
 
 const utils = require('@iobroker/adapter-core');
 const axios = require('axios');
-const VERSION = require('./io-package.json').common.version;
 
 
 function parseNumberLocale(v) {
@@ -76,7 +75,6 @@ class CptAdapter extends utils.Adapter {
         // per-port status cache (to detect transitions to "available")
         this.lastPortStatusByKey = {}; // { ["stations.<city>.<station>|<outlet>"]: "available"|... }
         this.stationPrefixes = [];
-        this.enabledStations = [];
 
         // remember which incomplete stations were already warned (avoid log spam)
         this.invalidStationWarned = new Set();
@@ -406,21 +404,9 @@ class CptAdapter extends utils.Adapter {
             native: {},
         });
 
-        await this.setObjectNotExistsAsync('tools.lastTest', {
-            type: 'state',
-            common: { name: 'Letzter Test', type: 'string', role: 'date', read: true, write: false },
-            native: {},
-        });
-
-        await this.setObjectNotExistsAsync('tools.lastTestResult', {
-            type: 'state',
-            common: { name: 'Letztes Testergebnis', type: 'string', role: 'text', read: true, write: false },
-            native: {},
-        });
-
         await this.setObjectNotExistsAsync('tools.refreshNow', {
             type: 'state',
-            common: { name: 'Refresh jetzt', type: 'boolean', role: 'button', read: true, write: true, def: false },
+            common: { name: 'Manueller Refresh (Trigger)', type: 'boolean', role: 'button', read: true, write: true, def: false },
             native: {},
         });
 
@@ -432,7 +418,19 @@ class CptAdapter extends utils.Adapter {
 
         await this.setObjectNotExistsAsync('tools.lastRefreshResult', {
             type: 'state',
-            common: { name: 'Letztes Refresh Ergebnis', type: 'string', role: 'text', read: true, write: false },
+            common: { name: 'Letztes Refresh-Ergebnis', type: 'string', role: 'text', read: true, write: false },
+            native: {},
+        });
+
+        await this.setObjectNotExistsAsync('tools.lastTest', {
+            type: 'state',
+            common: { name: 'Letzter Test', type: 'string', role: 'date', read: true, write: false },
+            native: {},
+        });
+
+        await this.setObjectNotExistsAsync('tools.lastTestResult', {
+            type: 'state',
+            common: { name: 'Letztes Testergebnis', type: 'string', role: 'text', read: true, write: false },
             native: {},
         });
 
@@ -1498,21 +1496,21 @@ async cleanupObsoleteStations(currentPrefixes) {
             return st ? st.val : undefined;
         };
 
-        const lastRefreshRaw = getVal('tools.lastRefresh');
-        const lastRefresh = lastRefreshRaw ? new Date(lastRefreshRaw).toLocaleString('de-DE') : '—';
-        const headerTitle = `⚡ CPT ${VERSION}`;
-        const refreshButton = `<button id="cptRefreshBtnMobile" onclick="this.style.background='#777';this.innerHTML='⏳ Refresh...';(function(v){if(v&&v.conn&&v.conn.setState){v.conn.setState('cpt.0.tools.refreshNow', true);}else if(window.parent&&window.parent.vis&&window.parent.vis.conn&&window.parent.vis.conn.setState){window.parent.vis.conn.setState('cpt.0.tools.refreshNow', true);}})(typeof vis!=='undefined'?vis:null);" style="background:#2b8cff;border:none;color:white;padding:6px 12px;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;">🔄 Refresh</button>`;
-        const refreshScript = `<script>(function(){let last=null;setInterval(function(){try{const v=(typeof vis!=='undefined'&&vis&&vis.states&&vis.states.attr)?vis.states.attr('cpt.0.tools.lastRefresh.val'):(window.parent&&window.parent.vis&&window.parent.vis.states&&window.parent.vis.states.attr?window.parent.vis.states.attr('cpt.0.tools.lastRefresh.val'):null);if(v&&v!==last){last=v;const b=document.getElementById('cptRefreshBtnMobile');if(b){b.style.background='#2b8cff';b.innerHTML='🔄 Refresh';}const t=document.getElementById('cptLastRefreshMobile');if(t){try{t.textContent=new Date(v).toLocaleString('de-DE');}catch(_){t.textContent=v;}}}}catch(e){}},1500);})();</script>`;
+        const updated = new Date().toLocaleString('de-DE');
+        const lastRefreshRaw = getVal('tools.lastRefresh') ?? '';
+        const lastRefresh = lastRefreshRaw ? esc(new Date(lastRefreshRaw).toLocaleString('de-DE')) : '—';
         let out = `
 <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;font-size:16px;">
-  <div style="display:flex;align-items:flex-end;justify-content:space-between;margin-bottom:10px;gap:10px;">
+  <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:10px;margin-bottom:10px;">
     <div>
-      <div style="font-weight:900;font-size:18px;">${esc(headerTitle)}</div>
-      <div style="opacity:.72;font-size:11px;margin-top:2px;">Letzter Refresh: <span id="cptLastRefreshMobile">${esc(lastRefresh)}</span></div>
+      <div style="font-weight:900;font-size:18px;">⚡ CPT ${esc(this.version)}</div>
+      <div style="opacity:.7;font-size:11px;margin-top:2px;">Letzter Refresh: ${lastRefresh}</div>
     </div>
-    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:flex-end;">${refreshButton}</div>
+    <div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px;">
+      <button onclick="this.style.background='#777';this.innerHTML='⏳ Refresh...';if(window.vis&&vis.conn){vis.conn.setState('cpt.0.tools.refreshNow',true);}else if(window.parent&&window.parent.vis&&window.parent.vis.conn){window.parent.vis.conn.setState('cpt.0.tools.refreshNow',true);}" style="background:#2b8cff;border:none;color:white;padding:6px 12px;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;">🔄 Refresh</button>
+      <div style="opacity:.7;font-size:11px;">${esc(updated)}</div>
+    </div>
   </div>
-  ${refreshScript}
 
   ${(() => {
       const nName  = getVal('nearestType2.name') ?? '';
@@ -1630,7 +1628,7 @@ async cleanupObsoleteStations(currentPrefixes) {
           ${dotsHtml ? `<div style="margin-top:6px;line-height:1;">${dotsHtml}</div>` : ''}
           ${portsDetailText ? `<div style="opacity:.8;font-size:11px;margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(portsDetailText)}</div>` : ''}
           ${ageText ? `<div style="opacity:.65;font-size:11px;margin-top:6px;">${ageText}</div>` : ''}
-          <div style="opacity:.58;font-size:10px;margin-top:4px;">Refresh: ${esc(lastRefresh)}</div>
+          <div style="opacity:.55;font-size:10px;margin-top:4px;">Refresh: ${lastRefresh}</div>
         </div>
       </div>
     </div>
@@ -1695,7 +1693,7 @@ async cleanupObsoleteStations(currentPrefixes) {
                 neutral: 'background:rgba(255,255,255,.10); border:1px solid rgba(255,255,255,.18);',
             };
             const st = styles[kind] || styles.neutral;
-            return `<span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:11px;white-space:nowrap;${st}">${esc(text)}</span>`;
+            return `<span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;white-space:nowrap;${st}">${esc(text)}</span>`;
         };
 
         const kindFromStatus = (s) => {
@@ -1724,6 +1722,9 @@ async cleanupObsoleteStations(currentPrefixes) {
             return st ? st.val : undefined;
         };
 
+        // Human readable "age" from a timestamp (ms).
+        // - show minutes for <= 100 minutes
+        // - show hours for > 100 minutes
         const ageText = (tsMs) => {
             if (!tsMs || Number.isNaN(Number(tsMs))) return '—';
             const diffMin = Math.max(0, Math.floor((Date.now() - Number(tsMs)) / 60000));
@@ -1735,21 +1736,21 @@ async cleanupObsoleteStations(currentPrefixes) {
             return `${diffMin} min`;
         };
 
-        const lastRefreshRaw = getVal('tools.lastRefresh');
-        const lastRefresh = lastRefreshRaw ? new Date(lastRefreshRaw).toLocaleString('de-DE') : '—';
-        const headerTitle = `⚡ CPT ${VERSION}`;
-        const refreshButton = `<button id="cptRefreshBtnDesktop" onclick="this.style.background='#777';this.innerHTML='⏳ Refresh...';(function(v){if(v&&v.conn&&v.conn.setState){v.conn.setState('cpt.0.tools.refreshNow', true);}else if(window.parent&&window.parent.vis&&window.parent.vis.conn&&window.parent.vis.conn.setState){window.parent.vis.conn.setState('cpt.0.tools.refreshNow', true);}})(typeof vis!=='undefined'?vis:null);" style="background:#2b8cff;border:none;color:white;padding:5px 10px;border-radius:8px;font-size:11px;font-weight:700;cursor:pointer;">🔄 Refresh</button>`;
-        const refreshScript = `<script>(function(){let last=null;setInterval(function(){try{const v=(typeof vis!=='undefined'&&vis&&vis.states&&vis.states.attr)?vis.states.attr('cpt.0.tools.lastRefresh.val'):(window.parent&&window.parent.vis&&window.parent.vis.states&&window.parent.vis.states.attr?window.parent.vis.states.attr('cpt.0.tools.lastRefresh.val'):null);if(v&&v!==last){last=v;const b=document.getElementById('cptRefreshBtnDesktop');if(b){b.style.background='#2b8cff';b.innerHTML='🔄 Refresh';}const t=document.getElementById('cptLastRefreshDesktop');if(t){try{t.textContent=new Date(v).toLocaleString('de-DE');}catch(_){t.textContent=v;}}}}catch(e){}},1500);})();</script>`;
+        const updated = new Date().toLocaleString('de-DE');
+        const lastRefreshRaw = getVal('tools.lastRefresh') ?? '';
+        const lastRefresh = lastRefreshRaw ? esc(new Date(lastRefreshRaw).toLocaleString('de-DE')) : '—';
         let out = `
-<div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;font-size:13px;">
-  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;gap:10px;">
+<div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;font-size:13px;line-height:1.2;">
+  <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:10px;margin-bottom:8px;">
     <div>
-      <div style="font-weight:800;font-size:15px;">${esc(headerTitle)}</div>
-      <div style="opacity:.75;font-size:11px;">Letzter Refresh: <span id="cptLastRefreshDesktop">${esc(lastRefresh)}</span></div>
+      <div style="font-weight:800;font-size:16px;">⚡ CPT ${esc(this.version)}</div>
+      <div style="opacity:.75;font-size:11px;">Letzter Refresh: ${lastRefresh}</div>
     </div>
-    <div>${refreshButton}</div>
+    <div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px;">
+      <button onclick="this.style.background='#777';this.innerHTML='⏳ Refresh...';vis.conn.setState('cpt.0.tools.refreshNow', true);" style="background:#2b8cff;border:none;color:white;padding:4px 10px;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;">🔄 Refresh</button>
+      <div style="opacity:.75;font-size:11px;">Update: ${esc(updated)}</div>
+    </div>
   </div>
-  ${refreshScript}
 
   ${(() => {
       const nName  = getVal('nearestType2.name') ?? '';
@@ -1770,13 +1771,13 @@ async cleanupObsoleteStations(currentPrefixes) {
       const addr = has ? esc(nAddr) : esc(nErr || 'Keine Station im Umkreis gefunden');
 
       return `
-  <div style="border:1px solid rgba(255,255,255,.12);border-radius:12px;padding:9px 10px;margin-bottom:8px;background:rgba(0,0,0,.18);box-shadow:0 8px 18px rgba(0,0,0,.16);">
+  <div style="border:1px solid rgba(255,255,255,.12);border-radius:14px;padding:12px;margin-bottom:10px;background:rgba(0,0,0,.18);box-shadow:0 10px 24px rgba(0,0,0,.18);">
     <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:10px;">
       <div style="min-width:0;">
         <div style="font-weight:900;font-size:13px;letter-spacing:.02em;opacity:.9;">🧭 Nächste freie Typ2</div>
-        <div style="margin-top:4px;font-size:13px;font-weight:900;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${title}</div>
-        <div style="opacity:.8;font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${addr}</div>
-        <div style="margin-top:5px;display:flex;gap:6px;flex-wrap:wrap;">
+        <div style="margin-top:6px;font-size:14px;font-weight:900;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${title}</div>
+        <div style="opacity:.8;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${addr}</div>
+        <div style="margin-top:6px;display:flex;gap:8px;flex-wrap:wrap;">
           ${badge(distTxt, 'neutral')}
           ${badge(portsTxt, statusKind)}
         </div>
@@ -1785,15 +1786,27 @@ async cleanupObsoleteStations(currentPrefixes) {
     </div>
   </div>`;
   })()}
-
-  <div style="display:flex;flex-direction:column;gap:6px;">
+  </div>
+  <div style="border:1px solid rgba(255,255,255,.12);border-radius:14px;overflow:hidden;background:rgba(0,0,0,.18);box-shadow:0 10px 24px rgba(0,0,0,.28);">
 `;
 
         if (!prefixes.length) {
-            out += `<div style="padding:10px;border:1px solid rgba(255,255,255,.12);border-radius:10px;background:rgba(0,0,0,.18);">Keine Stationsdaten gefunden.</div>`;
-            out += `</div></div>`;
+            out += `<div style="padding:12px;">Keine Stationsdaten gefunden.</div></div></div>`;
             return out;
         }
+
+        out += `
+    <table style="width:100%;border-collapse:collapse;">
+      <tr style="background:rgba(255,255,255,.06)">
+        <th style="text-align:left;padding:6px 8px;font-size:11px;letter-spacing:.04em;opacity:.85;">ORT</th>
+        <th style="text-align:left;padding:6px 8px;font-size:11px;letter-spacing:.04em;opacity:.85;">STATION</th>
+        <th style="text-align:left;padding:6px 8px;font-size:11px;letter-spacing:.04em;opacity:.85;">STATUS</th>
+        <th style="text-align:left;padding:6px 8px;font-size:11px;letter-spacing:.04em;opacity:.85;">PORTS</th>
+        <th style="text-align:left;padding:6px 8px;font-size:11px;letter-spacing:.04em;opacity:.85;">DISTANZ</th>
+        <th style="text-align:left;padding:6px 8px;font-size:11px;letter-spacing:.04em;opacity:.85;">ALTER</th>
+        <th style="text-align:left;padding:6px 8px;font-size:11px;letter-spacing:.04em;opacity:.85;">GPS</th>
+      </tr>
+`;
 
         for (const p of prefixes) {
             const city = getVal(p + '.city') ?? '';
@@ -1803,10 +1816,10 @@ async cleanupObsoleteStations(currentPrefixes) {
             const st = getVal(p + '.statusDerived') ?? '';
 
             const portsSummary = (fp !== undefined && pc !== undefined)
-                ? `${fp}/${pc} frei`
-                : '—';
+                ? badge(`${fp}/${pc} frei`, (Number(fp) > 0 ? 'ok' : 'warn'))
+                : badge('—', 'neutral');
 
-            const portParts = [];
+            const portBadges = [];
             const prefixFull = this.namespace + '.' + p + '.ports.';
             let newestPortTs = 0;
             for (const key of Object.keys(allStates)) {
@@ -1816,59 +1829,78 @@ async cleanupObsoleteStations(currentPrefixes) {
                 const n = m[1];
                 const s2 = getVal(p + `.ports.${n}.statusV2`);
                 const s1 = getVal(p + `.ports.${n}.status`);
-                const portStatus = (s2 ?? s1);
-                if (portStatus === undefined) continue;
-                portParts.push(badge(`P${n}: ${portStatus}`, kindFromPort(portStatus)));
+                const s = (s2 ?? s1);
+                if (s === undefined) continue;
+                portBadges.push({ n: Number(n), html: badge(`P${n}: ${s}`, kindFromPort(s)) });
+
+                // track newest timestamp across port statusV2 states
                 const stObj = allStates[key];
                 const ts = stObj ? (stObj.lc || stObj.ts) : 0;
                 if (ts && ts > newestPortTs) newestPortTs = ts;
             }
+            portBadges.sort((a, b) => a.n - b.n);
+            const portText = portBadges.length ? portBadges.map(x => x.html).join(' ') : `<span style="opacity:.75;">—</span>`;
 
             const gpsLat = getVal(p + '.gps.lat');
             const gpsLon = getVal(p + '.gps.lon');
             const gpsOk = (gpsLat !== undefined && gpsLon !== undefined);
             const mapsUrl = gpsOk ? `https://www.google.com/maps?q=${gpsLat},${gpsLon}` : '';
             const gpsText = gpsOk
-                ? `<a href="${mapsUrl}" target="_blank" style="color:inherit;text-decoration:underline;opacity:.9;">${esc(gpsLat)}, ${esc(gpsLon)}</a>`
+                ? `<a href="${mapsUrl}" target="_blank" style="color:inherit; text-decoration:underline; opacity:.95;">${esc(gpsLat)}, ${esc(gpsLon)}</a>`
                 : `<span style="opacity:.75;">—</span>`;
 
             const dKm = getVal(p + '.distance.km');
-            const distText = (dKm !== undefined && dKm !== null && dKm !== '') ? `${dKm} km` : '—';
+            const distText = (dKm !== undefined && dKm !== null && dKm !== '')
+                ? badge(`${dKm} km`, 'neutral')
+                : `<span style="opacity:.75;">—</span>`;
 
+            // Age: prefer latest port status timestamp; fallback to derived status timestamp
             let ageTs = newestPortTs;
             if (!ageTs) {
                 const stObj = getState(p + '.statusDerived');
                 ageTs = stObj ? (stObj.lc || stObj.ts) : 0;
             }
-            const ageLabel = `vor ${ageText(ageTs)}`;
+            const ageBadge = badge(`vor ${ageText(ageTs)}`, 'neutral');
 
             out += `
-    <div style="border:1px solid rgba(255,255,255,.10);border-radius:10px;padding:7px 10px;background:rgba(255,255,255,.03);">
-      <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;line-height:1.2;">
-        <div style="min-width:0;display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
-          <span style="font-weight:800;white-space:nowrap;">${esc(city)}</span>
-          <span style="opacity:.75;">•</span>
-          <span style="font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:360px;display:inline-block;vertical-align:bottom;">${esc(name)}</span>
-        </div>
-        <div style="flex:0 0 auto;">${badge(st || '—', kindFromStatus(st))}</div>
-      </div>
-      <div style="margin-top:4px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;line-height:1.2;">
-        ${badge(portsSummary, (Number(fp) > 0 ? 'ok' : 'warn'))}
-        ${badge(distText, 'neutral')}
-        ${badge(ageLabel, 'neutral')}
-      </div>
-      <div style="margin-top:4px;display:flex;align-items:center;justify-content:space-between;gap:10px;line-height:1.2;">
-        <div style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${portParts.length ? portParts.join(' ') : `<span style="opacity:.75;">—</span>`}</div>
-        <div style="flex:0 0 auto;font-size:11px;opacity:.85;">${gpsText}</div>
-      </div>
-    </div>`;
+      <tr style="border-top:1px solid rgba(255,255,255,.08)">
+        <td style="padding:6px 8px;vertical-align:top;">${esc(city)}</td>
+        <td style="padding:6px 8px;vertical-align:top;font-weight:700;">${esc(name)}</td>
+        <td style="padding:6px 8px;vertical-align:top;">${badge(st || '—', kindFromStatus(st))}</td>
+        <td style="padding:6px 8px;vertical-align:top;">${portsSummary}<div style="margin-top:4px;line-height:1.4;">${portText}</div></td>
+        <td style="padding:6px 8px;vertical-align:top;">${distText}</td>
+        <td style="padding:6px 8px;vertical-align:top;">${ageBadge}</td>
+        <td style="padding:6px 8px;vertical-align:top;">${gpsText}</td>
+      </tr>
+`;
         }
 
         out += `
+    </table>
   </div>
 </div>`;
         return out;
     }
+
+    getConfiguredStations() {
+        return (Array.isArray(this.config?.stations) ? this.config.stations : [])
+            .filter((s) => s && typeof s === 'object')
+            .map((s, idx) => {
+                const deviceId1 = s.deviceId1 ?? s.stationId ?? s.deviceId ?? s.id;
+                const deviceId2 = s.deviceId2 ?? null;
+                const name = s.name || `station_${deviceId1 || idx + 1}`;
+                const enabled = (s.enabled == undefined || s.enabled == null) ? true : isTrue(s.enabled);
+                return {
+                    name,
+                    enabled,
+                    notifyOnAvailable: s.notifyOnAvailable === true,
+                    deviceId1: deviceId1 ? Number(deviceId1) : null,
+                    deviceId2: deviceId2 ? Number(deviceId2) : null,
+                };
+            })
+            .filter((s) => !!s.deviceId1);
+    }
+
 
 async onReady() {
         this.log.info('Adapter CPT gestartet');
@@ -1912,31 +1944,13 @@ async onReady() {
 
         const intervalMin = Number(this.config.interval) || 5;
 
-        const stations = (Array.isArray(this.config.stations) ? this.config.stations : [])
-            .filter((s) => s && typeof s === 'object')
-            .map((s, idx) => {
-                const deviceId1 = s.deviceId1 ?? s.stationId ?? s.deviceId ?? s.id;
-                const deviceId2 = s.deviceId2 ?? null;
-                const name = s.name || `station_${deviceId1 || idx + 1}`;
-                // Enabled can be boolean/number/string from admin JSON config
-                const enabled = (s.enabled == undefined || s.enabled == null) ? true : isTrue(s.enabled);
-                return {
-                    name,
-                    enabled,
-                    notifyOnAvailable: s.notifyOnAvailable === true,
-                    deviceId1: deviceId1 ? Number(deviceId1) : null,
-                    deviceId2: deviceId2 ? Number(deviceId2) : null,
-                };
-            })
-            .filter((s) => !!s.deviceId1);
+        const stations = this.getConfiguredStations();
 
         const enabledStations = stations.filter((s) => {
             // Backward compatible default: if the flag was not present in older configs, treat as enabled
             if (s.enabled === undefined || s.enabled === null || s.enabled === '') return true;
             return isTrue(s.enabled);
         });
-
-        this.enabledStations = enabledStations;
 
         if (!enabledStations.length) {
             this.log.warn('Keine aktiven Stationen konfiguriert (enabled=false)');
@@ -1998,18 +2012,20 @@ async onReady() {
 
         if (id === `${this.namespace}.tools.refreshNow` && state.val === true) {
             try {
-                const stations = Array.isArray(this.enabledStations) ? this.enabledStations : [];
-                if (!stations.length) {
-                    await this.setStateAsync('tools.lastRefreshResult', { val: 'Keine aktiven Stationen', ack: true });
-                } else {
-                    await this.updateAllStations(stations);
-                    this.scheduleVisHtmlUpdate('manual refresh');
-                    this.scheduleNearestType2Update('manual refresh');
-                    await this.setStateAsync('tools.lastRefresh', { val: new Date().toISOString(), ack: true });
+                const stations = this.getConfiguredStations();
+                const enabledStations = stations.filter((s) => s.enabled !== false);
+                if (enabledStations.length) {
+                    await this.updateAllStations(enabledStations);
                     await this.setStateAsync('tools.lastRefreshResult', { val: 'ok', ack: true });
+                } else {
+                    await this.setStateAsync('tools.lastRefreshResult', { val: 'no active stations', ack: true });
                 }
+                await this.setStateAsync('tools.lastRefresh', { val: new Date().toISOString(), ack: true });
+                await this.writeVisHtmlObject();
+                await this.writeVisHtmlMobileObject();
             } catch (e) {
-                await this.setStateAsync('tools.lastRefreshResult', { val: String(e?.message || e), ack: true });
+                await this.setStateAsync('tools.lastRefreshResult', { val: String(e.message || e), ack: true });
+                this.log.warn(`Manueller Refresh fehlgeschlagen: ${e.message}`);
             } finally {
                 await this.setStateAsync('tools.refreshNow', { val: false, ack: true });
             }
