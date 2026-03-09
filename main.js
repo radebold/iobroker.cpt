@@ -4,7 +4,7 @@ const utils = require('@iobroker/adapter-core');
 const axios = require('axios');
 const IO_PKG = require('./io-package.json');
 const VERSION = (IO_PKG && IO_PKG.common && IO_PKG.common.version) ? IO_PKG.common.version : '0.0.0';
-const TOMTOM_LOGO_PATH = '/adapter/cpt/_icons/tomtom.png';
+const TOMTOM_LOGO_PATH = '/adapter/cpt/tomtom.png';
 
 
 function parseNumberLocale(v) {
