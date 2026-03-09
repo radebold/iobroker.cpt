@@ -631,7 +631,7 @@
         "refreshText2": {
           "type": "staticText",
           "text": {
-            "de": "Die letzte Aktualisierung wird relativ angezeigt, z. B. „gerade eben“, „vor 3 min“ oder „vor 1 h“.",
+            "de": "Die letzte Aktualisierung wird als Uhrzeit ohne Sekunden angezeigt, z. B. „14:32“.",
             "en": "The last update is shown as a relative time, e.g. “just now”, “3 min ago” or “1 h ago”."
           }
         },

@@ -1795,17 +1795,9 @@ async cleanupObsoleteStations(currentPrefixes) {
         const lastRefreshText = () => {
             const ts = getVal('tools.lastRefresh');
             if (!ts) return '—';
-            const ms = new Date(ts).getTime();
-            if (!Number.isFinite(ms)) return '—';
-            const diffMin = Math.max(0, Math.floor((Date.now() - ms) / 60000));
-            if (diffMin < 1) return 'gerade eben';
-            if (diffMin === 1) return 'vor 1 min';
-            if (diffMin < 60) return `vor ${diffMin} min`;
-            const h = Math.floor(diffMin / 60);
-            if (h === 1) return 'vor 1 h';
-            if (h < 24) return `vor ${h} h`;
-            const d = Math.floor(h / 24);
-            return d === 1 ? 'vor 1 Tag' : `vor ${d} Tagen`;
+            const d = new Date(ts);
+            if (!Number.isFinite(d.getTime())) return '—';
+            return d.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
         };
 
         const updated = lastRefreshText();
@@ -2045,17 +2037,9 @@ async cleanupObsoleteStations(currentPrefixes) {
         const lastRefreshText = () => {
             const ts = getVal('tools.lastRefresh');
             if (!ts) return '—';
-            const ms = new Date(ts).getTime();
-            if (!Number.isFinite(ms)) return '—';
-            const diffMin = Math.max(0, Math.floor((Date.now() - ms) / 60000));
-            if (diffMin < 1) return 'gerade eben';
-            if (diffMin === 1) return 'vor 1 min';
-            if (diffMin < 60) return `vor ${diffMin} min`;
-            const h = Math.floor(diffMin / 60);
-            if (h === 1) return 'vor 1 h';
-            if (h < 24) return `vor ${h} h`;
-            const d = Math.floor(h / 24);
-            return d === 1 ? 'vor 1 Tag' : `vor ${d} Tagen`;
+            const d = new Date(ts);
+            if (!Number.isFinite(d.getTime())) return '—';
+            return d.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
         };
 
         // Human readable "age" from a timestamp (ms).
