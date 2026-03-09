@@ -4,6 +4,7 @@ const utils = require('@iobroker/adapter-core');
 const axios = require('axios');
 const IO_PKG = require('./io-package.json');
 const VERSION = (IO_PKG && IO_PKG.common && IO_PKG.common.version) ? IO_PKG.common.version : '0.0.0';
+const TOMTOM_LOGO_DATA_URI = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABYAAAAfCAYAAADjuz3zAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAJcEhZcwAADsMAAA7DAcdvqGQAAAKzSURBVEhL1ZRdSFNhHMafbepxDax9hM5tFuTHVZiJ5kUUZVIoJEreSEQXQRdBUBcKOSGFKEHIq4QkIoKQCDFQFCIhpAuRiCBtanQsmVptc+k+8uzj7aI8vf93mxPJi34weJ/f/93D2c57joYxxrADaEXxr/j/ijWb/ccsHEJwcADB0SEo01OIeT3IKipBdmUVDI1NkMrKxa+opCwOPOuH76YTcf+KOFLRV9fA0nUXujyrOEpe7OtwYrWvV9RJ0ZrMsA4MIbOwmHqSAKw9frjlUgCI+7z4erEZLLBGPCmOLbrh63DyCtqcHFh67sEx8Q77PrqRPzIGQ30j2ROdl7HSfYc4MA5vZzuTbSb1M19oZ5Evn/ktKuJeeX8uiwfW1Dm54vDLF3yEsbUNGY4C4jYwtrRBZ7P/FZEIwq/H1UiKo4tuPsJQd5ZkHo0kwXC6lrjI3Ky6JsUsGuEjdGYLySLir+GPJikWi5RZF8kiytR7knWWveqaFEsHS/kIf083yTxR+ROCQ8+Jkw4dVtek2NDYxEeERod/H79olHhlegrL55vAfoZVl+EogFRZpeaEJ2+poRbrkxO8QuaBIkjlFdCZzVDmZhF+NQZE6P3IfdQPfXWNmhOKY8tLcJ86irjfz+tNybl8Bab2TuISHmldnhXWwRFk2B3iKCm7r16Hydkh6sQr3oCFgvjR14vVB/cR93npUKOB/tgJGFtuIKu0jM7+kLJYhTGsv30DxfUB8RUfMotLkF1xBNo9RnEnIX3xNklbHHj6BNGFBVHDUN+Q8A7mSVscGh3Gt0sXiNPl22Afn4RGkojnSTgVIrvO1EF//CRx5s7bm5YCwvs4FcqMi8kOC5NtJrbcfE4cJ2VLxYwx5mm9xmSHhSkzLnGUlC0Xxzzfma/rlqhTkvbmbZe0N2+77FjxL9efIBCGzcxQAAAAAElFTkSuQmCC';
 
 
 function parseNumberLocale(v) {
@@ -1652,7 +1653,8 @@ async cleanupObsoleteStations(currentPrefixes) {
                 neutral: 'background:rgba(255,255,255,.10); border:1px solid rgba(255,255,255,.18);',
             };
             const st = styles[kind] || styles.neutral;
-            return `<span style="display:inline-flex;align-items:center;gap:6px;padding:6px 10px;border-radius:999px;font-size:13px;font-weight:700;white-space:nowrap;${st}">${esc(text)}</span>`;
+            const content = (typeof text === 'string' && text.includes('<')) ? text : esc(text);
+            return `<span style="display:inline-flex;align-items:center;gap:6px;padding:6px 10px;border-radius:999px;font-size:13px;font-weight:700;white-space:nowrap;${st}">${content}</span>`;
         };
 
         const portDot = (kind) => {
@@ -1670,6 +1672,8 @@ async cleanupObsoleteStations(currentPrefixes) {
             const st = allStates[full];
             return st ? st.val : undefined;
         };
+
+        const tomtomDistanceHtml = (text) => `<span style="display:inline-flex;align-items:center;gap:4px;"><img src="${TOMTOM_LOGO_DATA_URI}" style="height:16px;width:auto;vertical-align:-3px;">${esc(text)}</span>`;
 
         const updated = new Date().toLocaleString('de-DE');
         let out = `
@@ -1689,9 +1693,11 @@ async cleanupObsoleteStations(currentPrefixes) {
       const nFree  = getVal('nearestType2.freePorts');
       const nPorts = getVal('nearestType2.portCount');
       const nErr   = getVal('nearestType2.lastError') ?? '';
+      const nDistType = getVal('nearestType2.distanceType') ?? '';
 
       const has = !!String(nName).trim();
-      const distTxt = (nDistM !== undefined && nDistM !== null && nDistM !== '') ? `${Math.round(Number(nDistM))} m` : '—';
+      const distTxtRaw = (nDistM !== undefined && nDistM !== null && nDistM !== '') ? `${Math.round(Number(nDistM))} m` : '—';
+      const distTxt = (nDistType === 'tomtom' && distTxtRaw !== '—') ? tomtomDistanceHtml(distTxtRaw) : esc(distTxtRaw);
       const portsTxt = (nFree !== undefined && nPorts !== undefined && nFree !== null && nPorts !== null && nFree !== '' && nPorts !== '') ? `${nFree}/${nPorts} frei` : '—';
 
       const statusKind = has ? ((Number(nFree) > 0) ? 'ok' : 'warn') : 'bad';
@@ -1862,7 +1868,8 @@ async cleanupObsoleteStations(currentPrefixes) {
                 neutral: 'background:rgba(255,255,255,.10); border:1px solid rgba(255,255,255,.18);',
             };
             const st = styles[kind] || styles.neutral;
-            return `<span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;white-space:nowrap;${st}">${esc(text)}</span>`;
+            const content = (typeof text === 'string' && text.includes('<')) ? text : esc(text);
+            return `<span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;white-space:nowrap;${st}">${content}</span>`;
         };
 
         const kindFromStatus = (s) => {
@@ -1890,6 +1897,8 @@ async cleanupObsoleteStations(currentPrefixes) {
             const st = getState(relId);
             return st ? st.val : undefined;
         };
+
+        const tomtomDistanceHtml = (text) => `<span style="display:inline-flex;align-items:center;gap:4px;"><img src="${TOMTOM_LOGO_DATA_URI}" style="height:16px;width:auto;vertical-align:-3px;">${esc(text)}</span>`;
 
         // Human readable "age" from a timestamp (ms).
         // - show minutes for <= 100 minutes
@@ -1923,9 +1932,11 @@ async cleanupObsoleteStations(currentPrefixes) {
       const nFree  = getVal('nearestType2.freePorts');
       const nPorts = getVal('nearestType2.portCount');
       const nErr   = getVal('nearestType2.lastError') ?? '';
+      const nDistType = getVal('nearestType2.distanceType') ?? '';
 
       const has = !!String(nName).trim();
-      const distTxt = (nDistM !== undefined && nDistM !== null && nDistM !== '') ? `${Math.round(Number(nDistM))} m` : '—';
+      const distTxtRaw = (nDistM !== undefined && nDistM !== null && nDistM !== '') ? `${Math.round(Number(nDistM))} m` : '—';
+      const distTxt = (nDistType === 'tomtom' && distTxtRaw !== '—') ? tomtomDistanceHtml(distTxtRaw) : esc(distTxtRaw);
       const portsTxt = (nFree !== undefined && nPorts !== undefined && nFree !== null && nPorts !== null && nFree !== '' && nPorts !== '') ? `${nFree}/${nPorts} frei` : '—';
 
       const statusKind = has ? ((Number(nFree) > 0) ? 'ok' : 'warn') : 'bad';
@@ -2029,8 +2040,9 @@ async cleanupObsoleteStations(currentPrefixes) {
                 : `<span style="opacity:.75;">—</span>`;
 
             const dKm = getVal(p + '.distance.km');
+            const distanceType = getVal(p + '.distanceType');
             const distText = (dKm !== undefined && dKm !== null && dKm !== '')
-                ? badge(`${dKm} km`, 'neutral')
+                ? badge((distanceType === 'tomtom' ? tomtomDistanceHtml(`${dKm} km`) : `${dKm} km`), 'neutral')
                 : `<span style="opacity:.75;">—</span>`;
 
             // Age: prefer latest port status timestamp; fallback to derived status timestamp
