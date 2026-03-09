@@ -44,7 +44,6 @@ class CptAdapter extends utils.Adapter {
         // transition detection (per stationPrefix)
         this.lastFreePortsByStation = {};
         this.stationPrefixByName = {};
-        this.enabledStations = [];
         this.stationPrefixByDeviceId = {};
 
         // car position (optional) - can be sourced from foreign states
@@ -417,28 +416,9 @@ class CptAdapter extends utils.Adapter {
             native: {},
         });
 
-        await this.setObjectNotExistsAsync('tools.refreshNow', {
-            type: 'state',
-            common: { name: 'Refresh jetzt (Trigger)', type: 'boolean', role: 'button', read: true, write: true, def: false },
-            native: {},
-        });
-
-        await this.setObjectNotExistsAsync('tools.lastRefresh', {
-            type: 'state',
-            common: { name: 'Letzter Refresh', type: 'string', role: 'date', read: true, write: false },
-            native: {},
-        });
-
-        await this.setObjectNotExistsAsync('tools.lastRefreshResult', {
-            type: 'state',
-            common: { name: 'Letztes Refresh-Ergebnis', type: 'string', role: 'text', read: true, write: false },
-            native: {},
-        });
-
         await this.setStateAsync('tools.export', { val: false, ack: true });
         await this.setStateAsync('tools.testNotify', { val: false, ack: true });
         await this.setStateAsync('tools.testNotifyAll', { val: false, ack: true });
-        await this.setStateAsync('tools.refreshNow', { val: false, ack: true });
     }
 
     async ensureCarObjects() {
@@ -1498,17 +1478,11 @@ async cleanupObsoleteStations(currentPrefixes) {
         };
 
         const updated = new Date().toLocaleString('de-DE');
-        const version = require('./io-package.json').common.version;
-        const lastRefresh = getVal('tools.lastRefresh') ?? '';
         let out = `
 <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;font-size:16px;">
-  <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:10px;margin-bottom:10px;">
-    <div>
-      <div style="font-weight:900;font-size:18px;">⚡ CPT ${esc(version)}</div>
-      <div style="opacity:.7;font-size:12px;">${esc(updated)}</div>
-      ${lastRefresh ? `<div style="opacity:.7;font-size:11px;margin-top:2px;">Refresh: ${esc(lastRefresh)}</div>` : ''}
-    </div>
-    <button onclick="this.style.background='#777';this.innerHTML='⏳ Refresh...';if(window.vis&&vis.conn){vis.conn.setState('cpt.0.tools.refreshNow', true);}else if(window.parent&&window.parent.vis&&window.parent.vis.conn){window.parent.vis.conn.setState('cpt.0.tools.refreshNow', true);}" style="background:#2b8cff;border:none;color:white;padding:6px 12px;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap;">🔄 Refresh</button>
+  <div style="display:flex;align-items:flex-end;justify-content:space-between;margin-bottom:10px;">
+    <div style="font-weight:900;font-size:18px;">⚡ ChargePoint</div>
+    <div style="opacity:.7;font-size:12px;">${esc(updated)}</div>
   </div>
 
   ${(() => {
@@ -1587,7 +1561,6 @@ async cleanupObsoleteStations(currentPrefixes) {
             const ageText = (ageMin !== undefined && ageMin !== null && ageMin !== '')
                 ? `seit ${esc(ageMin)} min`
                 : '';
-            const lastRefreshShort = lastRefresh ? String(lastRefresh).replace('T', ' ').replace('Z', '') : '';
 
             // Ports (Variante 1 + 2)
             let dotsHtml = '';
@@ -1628,7 +1601,6 @@ async cleanupObsoleteStations(currentPrefixes) {
           ${dotsHtml ? `<div style="margin-top:6px;line-height:1;">${dotsHtml}</div>` : ''}
           ${portsDetailText ? `<div style="opacity:.8;font-size:11px;margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(portsDetailText)}</div>` : ''}
           ${ageText ? `<div style="opacity:.65;font-size:11px;margin-top:6px;">${ageText}</div>` : ''}
-          ${lastRefreshShort ? `<div style="opacity:.55;font-size:10px;margin-top:4px;">Refresh: ${esc(lastRefreshShort)}</div>` : ''}
         </div>
       </div>
     </div>
@@ -1737,16 +1709,11 @@ async cleanupObsoleteStations(currentPrefixes) {
         };
 
         const updated = new Date().toLocaleString('de-DE');
-        const version = require('./io-package.json').common.version;
-        const lastRefresh = getVal('tools.lastRefresh') ?? '';
         let out = `
 <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;font-size:14px;">
-  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;gap:10px;">
-    <div style="font-weight:800;font-size:16px;">⚡ CPT ${esc(version)}</div>
-    <div style="display:flex;align-items:center;gap:10px;">
-      <div style="opacity:.75;font-size:12px;">Update: ${esc(updated)}${lastRefresh ? ` · Refresh: ${esc(lastRefresh)}` : ''}</div>
-      <button onclick="this.style.background='#777';this.innerHTML='⏳ Refresh...';if(window.vis&&vis.conn){vis.conn.setState('cpt.0.tools.refreshNow', true);}else if(window.parent&&window.parent.vis&&window.parent.vis.conn){window.parent.vis.conn.setState('cpt.0.tools.refreshNow', true);}" style="background:#2b8cff;border:none;color:white;padding:4px 10px;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap;">🔄 Refresh</button>
-    </div>
+  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
+    <div style="font-weight:800;font-size:16px;">⚡ ChargePoint</div>
+    <div style="opacity:.75;font-size:12px;">Update: ${esc(updated)}</div>
 
   ${(() => {
       const nName  = getVal('nearestType2.name') ?? '';
@@ -1914,7 +1881,6 @@ async onReady() {
         this.subscribeStates('tools.export');
         this.subscribeStates('tools.testNotify');
         this.subscribeStates('tools.testNotifyAll');
-        this.subscribeStates('tools.refreshNow');
         this.subscribeStates('stations.*.*.notifyOnAvailable');
         this.subscribeStates('stations.*.*.testNotify');
 
@@ -1943,8 +1909,6 @@ async onReady() {
             if (s.enabled === undefined || s.enabled === null || s.enabled === '') return true;
             return isTrue(s.enabled);
         });
-
-        this.enabledStations = enabledStations;
 
         if (!enabledStations.length) {
             this.log.warn('Keine aktiven Stationen konfiguriert (enabled=false)');
@@ -2010,23 +1974,6 @@ async onReady() {
             return;
         }
 
-        if (id === `${this.namespace}.tools.refreshNow` && state.val === true) {
-            try {
-                if (Array.isArray(this.enabledStations) && this.enabledStations.length) {
-                    await this.updateAllStations(this.enabledStations);
-                    await this.setStateAsync('tools.lastRefresh', { val: new Date().toISOString(), ack: true });
-                    await this.setStateAsync('tools.lastRefreshResult', { val: 'ok', ack: true });
-                } else {
-                    await this.setStateAsync('tools.lastRefreshResult', { val: 'keine aktiven Stationen', ack: true });
-                }
-            } catch (e) {
-                await this.setStateAsync('tools.lastRefreshResult', { val: e.message, ack: true });
-            } finally {
-                await this.setStateAsync('tools.refreshNow', { val: false, ack: true });
-            }
-            return;
-        }
-
         if (id === `${this.namespace}.tools.testNotify` && state.val === true) {
             const now = new Date().toISOString();
             const res = await this.sendMessageToChannels('CPT Test: Kommunikation OK ✅');
@@ -2052,7 +1999,6 @@ async onReady() {
                 this.log.warn(`TEST Notify ALL fehlgeschlagen: ${e.message}`);
             } finally {
                 await this.setStateAsync('tools.testNotifyAll', { val: false, ack: true });
-        await this.setStateAsync('tools.refreshNow', { val: false, ack: true });
             }
             return;
         }
