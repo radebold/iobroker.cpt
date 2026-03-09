@@ -58,15 +58,6 @@ class CptAdapter extends utils.Adapter {
         this.carLatStatic = (this.config && this.config.carLat !== undefined && this.config.carLat !== null && this.config.carLat !== '') ? Number(this.config.carLat) : null;
         this.carLonStatic = (this.config && this.config.carLon !== undefined && this.config.carLon !== null && this.config.carLon !== '') ? Number(this.config.carLon) : null;
 
-        // optional TomTom route distance (fallback remains haversine)
-        this.tomtomApiKey = (this.config && this.config.tomtomApiKey) ? String(this.config.tomtomApiKey).trim() : '';
-        this.tomtomTraffic = (this.config && this.config.tomtomTraffic !== undefined) ? isTrue(this.config.tomtomTraffic) : true;
-        this.tomtomCacheMin = (this.config && this.config.tomtomCacheMin !== undefined && this.config.tomtomCacheMin !== null && this.config.tomtomCacheMin !== '')
-            ? Number(this.config.tomtomCacheMin)
-            : 10;
-        this.tomtomDistanceCache = new Map();
-        this.tomtomWarned = false;
-
         // Notification filters
         this.notifySocBelow = (this.config && this.config.notifySocBelow !== undefined && this.config.notifySocBelow !== null && this.config.notifySocBelow !== '')
             ? Number(this.config.notifySocBelow)
@@ -187,92 +178,6 @@ class CptAdapter extends utils.Adapter {
             Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) * Math.sin(dLon / 2);
         const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
         return R * c;
-    }
-
-    getTomTomEnabled() {
-        return !!(this.tomtomApiKey && String(this.tomtomApiKey).trim());
-    }
-
-    makeTomTomCacheKey(lat1, lon1, lat2, lon2) {
-        const r = (n) => Number(n).toFixed(5);
-        return `${r(lat1)},${r(lon1)}>${r(lat2)},${r(lon2)}`;
-    }
-
-    async getDistanceInfo(lat1, lon1, lat2, lon2) {
-        const fallbackKm = this.haversineKm(lat1, lon1, lat2, lon2);
-        const fallback = {
-            source: 'airline',
-            km: Number.isFinite(fallbackKm) ? fallbackKm : null,
-            m: Number.isFinite(fallbackKm) ? Math.round(fallbackKm * 1000) : null,
-            travelTimeSec: null,
-        };
-
-        if (!this.getTomTomEnabled()) return fallback;
-
-        const cacheMin = Number.isFinite(this.tomtomCacheMin) ? Number(this.tomtomCacheMin) : 10;
-        const cacheKey = this.makeTomTomCacheKey(lat1, lon1, lat2, lon2);
-        const now = Date.now();
-        if (cacheMin > 0 && this.tomtomDistanceCache.has(cacheKey)) {
-            const cached = this.tomtomDistanceCache.get(cacheKey);
-            if (cached && cached.expires > now) return cached.value;
-            this.tomtomDistanceCache.delete(cacheKey);
-        }
-
-        const locs = `${Number(lat1)},${Number(lon1)}:${Number(lat2)},${Number(lon2)}`;
-        const url = `https://api.tomtom.com/routing/1/calculateRoute/${locs}/json`;
-        const params = {
-            key: this.tomtomApiKey,
-            travelMode: 'car',
-            routeType: 'fastest',
-            traffic: this.tomtomTraffic ? 'true' : 'false',
-            routeRepresentation: 'none',
-            computeTravelTimeFor: 'all',
-            departAt: 'now',
-        };
-
-        try {
-            const resp = await axios.get(url, {
-                timeout: 20000,
-                params,
-                validateStatus: () => true,
-                headers: {
-                    'User-Agent': 'Mozilla/5.0 (iobroker.cpt)',
-                    Accept: 'application/json,text/plain,*/*',
-                },
-            });
-
-            if (resp.status >= 200 && resp.status < 300) {
-                const summary = resp?.data?.routes?.[0]?.summary;
-                const m = Number(summary?.lengthInMeters);
-                const travelTimeSec = Number(summary?.travelTimeInSeconds);
-                if (Number.isFinite(m) && m >= 0) {
-                    const value = {
-                        source: 'tomtom',
-                        km: m / 1000,
-                        m: Math.round(m),
-                        travelTimeSec: Number.isFinite(travelTimeSec) ? travelTimeSec : null,
-                    };
-                    if (cacheMin > 0) {
-                        this.tomtomDistanceCache.set(cacheKey, {
-                            expires: now + (cacheMin * 60 * 1000),
-                            value,
-                        });
-                    }
-                    return value;
-                }
-            }
-
-            const errText = typeof resp?.data === 'string' ? resp.data : JSON.stringify(resp?.data || {});
-            throw new Error(`HTTP ${resp.status} ${errText}`.slice(0, 500));
-        } catch (e) {
-            if (!this.tomtomWarned) {
-                this.tomtomWarned = true;
-                this.log.warn(`TomTom Routing nicht nutzbar, falle auf Luftlinie zurück: ${e.message}`);
-            } else {
-                this.log.debug(`TomTom Routing fehlgeschlagen, fallback Luftlinie: ${e.message}`);
-            }
-            return fallback;
-        }
     }
 
     async updateStateIfChanged(id, val, ack = true) {
@@ -852,13 +757,15 @@ class CptAdapter extends utils.Adapter {
             let distM = parseNumberLocale(nearest.__distanceM ?? nearest.distance ?? nearest.distance_m ?? nearest.distanceMeters ?? nearest.distance_meters);
             const stLat = parseNumberLocale(nearest.lat ?? nearest.latitude);
             const stLon = parseNumberLocale(nearest.lon ?? nearest.longitude);
-            if (Number.isFinite(stLat) && Number.isFinite(stLon)) {
-                const distInfo = await this.getDistanceInfo(lat, lon, stLat, stLon);
-                if (Number.isFinite(Number(distInfo?.m))) {
-                    distM = Number(distInfo.m);
-                } else if (!Number.isFinite(distM)) {
-                    distM = Math.round(this.haversineKm(lat, lon, stLat, stLon) * 1000);
-                }
+            if (!Number.isFinite(distM) && Number.isFinite(stLat) && Number.isFinite(stLon)) {
+                // compute haversine distance (meters)
+                const R = 6371000;
+                const toRad = (x) => (x * Math.PI) / 180;
+                const dLat = toRad(stLat - lat);
+                const dLon = toRad(stLon - lon);
+                const a = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(lat)) * Math.cos(toRad(stLat)) * Math.sin(dLon / 2) ** 2;
+                const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+                distM = R * c;
             }
             const latS = parseNumberLocale(nearest.lat ?? nearest.latitude);
             const lonS = parseNumberLocale(nearest.lon ?? nearest.longitude);
@@ -1188,36 +1095,6 @@ class CptAdapter extends utils.Adapter {
         return Array.isArray(data1?.portsInfo?.ports) ? data1.portsInfo.ports : [];
     }
 
-
-    async cleanupObsoletePortStates(stationPrefix, keepPortCount) {
-        try {
-            const pat = `${this.namespace}.${stationPrefix}.ports.*.statusV2`;
-            const states = await this.getStatesAsync(pat);
-            const stalePorts = new Set();
-            for (const key of Object.keys(states || {})) {
-                const m = key.match(/\.ports\.(\d+)\.statusV2$/);
-                if (!m) continue;
-                const n = Number(m[1]);
-                if (!Number.isFinite(n) || n <= keepPortCount) continue;
-                stalePorts.add(n);
-            }
-
-            for (const n of Array.from(stalePorts).sort((a, b) => a - b)) {
-                const portPrefix = `${stationPrefix}.ports.${n}`;
-                await this.updateStateIfChanged(`${portPrefix}.status`, '');
-                await this.updateStateIfChanged(`${portPrefix}.statusV2`, '');
-                await this.updateStateIfChanged(`${portPrefix}.evseId`, '');
-                await this.updateStateIfChanged(`${portPrefix}.displayPlugType`, '');
-                await this.updateStateIfChanged(`${portPrefix}.maxPowerKw`, null);
-                await this.setStateAsync(`${portPrefix}.lastUpdate`, { val: new Date().toISOString(), ack: true });
-                delete this.lastPortStatusByKey[`${stationPrefix}|${n}`];
-                this.log.debug(`Bereinige veralteten Portstatus: ${portPrefix}`);
-            }
-        } catch (e) {
-            this.log.debug(`cleanupObsoletePortStates fehlgeschlagen für ${stationPrefix}: ${e?.message || e}`);
-        }
-    }
-
     async updateAllStations(stations) {
         const currentPrefixes = new Set();
         for (const st of stations) {
@@ -1322,8 +1199,6 @@ class CptAdapter extends utils.Adapter {
                 await this.setStateAsync(`${portPrefix}.lastUpdate`, { val: new Date().toISOString(), ack: true });
             }
 
-            await this.cleanupObsoletePortStates(stationPrefix, portCount);
-
             // notify logic: when any port transitions to "available"
             if (anyPortBecameAvailable) {
                 await this.attemptNotifyForStation({
@@ -1359,13 +1234,12 @@ class CptAdapter extends utils.Adapter {
                 await this.updateStateIfChanged(`${stationPrefixRel}.distance.m`, null);
                 return;
             }
-            const dist = await this.getDistanceInfo(latCar, lonCar, Number(gps.lat), Number(gps.lon));
-            const km = Number(dist?.km);
-            const m = Number(dist?.m);
-            if (!Number.isFinite(km) || !Number.isFinite(m)) return;
+            const km = this.haversineKm(latCar, lonCar, Number(gps.lat), Number(gps.lon));
+            if (!Number.isFinite(km)) return;
+            const m = Math.round(km * 1000);
             const kmRound = Math.round(km * 100) / 100;
             await this.updateStateIfChanged(`${stationPrefixRel}.distance.km`, kmRound);
-            await this.updateStateIfChanged(`${stationPrefixRel}.distance.m`, Math.round(m));
+            await this.updateStateIfChanged(`${stationPrefixRel}.distance.m`, m);
         } catch (e) {
             this.log.debug(`Distanzberechnung fehlgeschlagen (${stationPrefixRel}): ${e.message}`);
         }
@@ -1948,38 +1822,23 @@ async cleanupObsoleteStations(currentPrefixes) {
                 : badge('—', 'neutral');
 
             const portBadges = [];
+            const prefixFull = this.namespace + '.' + p + '.ports.';
             let newestPortTs = 0;
-            const portCountNum = Number(pc);
-            if (Number.isFinite(portCountNum) && portCountNum > 0) {
-                for (let n = 1; n <= portCountNum; n++) {
-                    const s2 = getVal(p + `.ports.${n}.statusV2`);
-                    const s1 = getVal(p + `.ports.${n}.status`);
-                    const s = (s2 ?? s1);
-                    if (s === undefined || s === null || s === '') continue;
-                    portBadges.push({ n, html: badge(`P${n}: ${s}`, kindFromPort(s)) });
+            for (const key of Object.keys(allStates)) {
+                if (!key.startsWith(prefixFull) || !key.endsWith('.statusV2')) continue;
+                const m = key.match(/\.ports\.(\d+)\.statusV2$/);
+                if (!m) continue;
+                const n = m[1];
+                const s2 = getVal(p + `.ports.${n}.statusV2`);
+                const s1 = getVal(p + `.ports.${n}.status`);
+                const s = (s2 ?? s1);
+                if (s === undefined) continue;
+                portBadges.push({ n: Number(n), html: badge(`P${n}: ${s}`, kindFromPort(s)) });
 
-                    const stObj = allStates[this.namespace + '.' + p + `.ports.${n}.statusV2`];
-                    const ts = stObj ? (stObj.lc || stObj.ts) : 0;
-                    if (ts && ts > newestPortTs) newestPortTs = ts;
-                }
-            } else {
-                const prefixFull = this.namespace + '.' + p + '.ports.';
-                for (const key of Object.keys(allStates)) {
-                    if (!key.startsWith(prefixFull) || !key.endsWith('.statusV2')) continue;
-                    const m = key.match(/\.ports\.(\d+)\.statusV2$/);
-                    if (!m) continue;
-                    const n = Number(m[1]);
-                    const s2 = getVal(p + `.ports.${n}.statusV2`);
-                    const s1 = getVal(p + `.ports.${n}.status`);
-                    const s = (s2 ?? s1);
-                    if (s === undefined || s === null || s === '') continue;
-                    portBadges.push({ n, html: badge(`P${n}: ${s}`, kindFromPort(s)) });
-
-                    const stObj = allStates[key];
-                    const ts = stObj ? (stObj.lc || stObj.ts) : 0;
-                    if (ts && ts > newestPortTs) newestPortTs = ts;
-                }
-                portBadges.sort((a, b) => a.n - b.n);
+                // track newest timestamp across port statusV2 states
+                const stObj = allStates[key];
+                const ts = stObj ? (stObj.lc || stObj.ts) : 0;
+                if (ts && ts > newestPortTs) newestPortTs = ts;
             }
             portBadges.sort((a, b) => a.n - b.n);
             const portText = portBadges.length ? portBadges.map(x => x.html).join(' ') : `<span style="opacity:.75;">—</span>`;
@@ -2035,16 +1894,12 @@ async onReady() {
 
         this.carLatStatic = (this.config && this.config.carLat !== undefined && this.config.carLat !== null && this.config.carLat !== '') ? Number(this.config.carLat) : null;
         this.carLonStatic = (this.config && this.config.carLon !== undefined && this.config.carLon !== null && this.config.carLon !== '') ? Number(this.config.carLon) : null;
-        this.tomtomApiKey = (this.config && this.config.tomtomApiKey) ? String(this.config.tomtomApiKey).trim() : '';
-        this.tomtomTraffic = (this.config && this.config.tomtomTraffic !== undefined) ? isTrue(this.config.tomtomTraffic) : true;
-        this.tomtomCacheMin = (this.config && this.config.tomtomCacheMin !== undefined && this.config.tomtomCacheMin !== null && this.config.tomtomCacheMin !== '') ? Number(this.config.tomtomCacheMin) : 10;
 
         this.notifySocBelow = (this.config && this.config.notifySocBelow !== undefined && this.config.notifySocBelow !== null && this.config.notifySocBelow !== '') ? Number(this.config.notifySocBelow) : 30;
         this.notifyMaxDistanceM = (this.config && this.config.notifyMaxDistanceM !== undefined && this.config.notifyMaxDistanceM !== null && this.config.notifyMaxDistanceM !== '') ? Number(this.config.notifyMaxDistanceM) : 500;
         this.notifyCooldownMin = (this.config && this.config.notifyCooldownMin !== undefined && this.config.notifyCooldownMin !== null && this.config.notifyCooldownMin !== '') ? Number(this.config.notifyCooldownMin) : 15;
 
         this.log.debug(`Config (car): latId='${this.carLatStateId}' lonId='${this.carLonStateId}' socId='${this.carSocStateId}' latStatic=${this.carLatStatic} lonStatic=${this.carLonStatic} socBelow=${this.notifySocBelow} maxDistM=${this.notifyMaxDistanceM} cooldownMin=${this.notifyCooldownMin}`);
-        this.log.debug(`Config (tomtom): enabled=${this.getTomTomEnabled()} traffic=${this.tomtomTraffic} cacheMin=${this.tomtomCacheMin}`);
 
         await this.ensureToolsObjects();
         await this.ensureCarObjects();

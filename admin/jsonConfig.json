@@ -366,6 +366,52 @@
           }
         }
       }
+    },
+    "tomtom": {
+      "type": "panel",
+      "label": {
+        "de": "TomTom",
+        "en": "TomTom"
+      },
+      "items": {
+        "tomtomApiKey": {
+          "type": "password",
+          "label": {
+            "de": "API-Key",
+            "en": "API key"
+          },
+          "help": {
+            "de": "Optional. Wenn gesetzt, werden Fahrdistanzen per TomTom Routing API mit travelMode=car berechnet. Ohne API-Key bleibt die Luftlinienberechnung aktiv.",
+            "en": "Optional. If set, driving distances are calculated via TomTom Routing API with travelMode=car. Without an API key, air-line distance remains active."
+          }
+        },
+        "tomtomTraffic": {
+          "type": "checkbox",
+          "default": true,
+          "label": {
+            "de": "TomTom Verkehr berücksichtigen",
+            "en": "Use TomTom traffic"
+          },
+          "help": {
+            "de": "Aktiviert Verkehrsberücksichtigung bei der Fahrdistanzberechnung.",
+            "en": "Use traffic-aware routing for driving distance calculation."
+          }
+        },
+        "tomtomCacheMin": {
+          "type": "number",
+          "min": 0,
+          "max": 1440,
+          "default": 10,
+          "label": {
+            "de": "TomTom Cache (Minuten)",
+            "en": "TomTom cache (minutes)"
+          },
+          "help": {
+            "de": "Zwischenspeicher für identische Start-/Zielpunkte, um API-Aufrufe zu reduzieren. 0 = kein Cache.",
+            "en": "Cache for identical origin/destination pairs to reduce API calls. 0 = no cache."
+          }
+        }
+      }
     }
   }
 }
