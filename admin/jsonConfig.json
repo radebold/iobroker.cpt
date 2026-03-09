@@ -375,7 +375,7 @@
       },
       "items": {
         "tomtomApiKey": {
-          "type": "password",
+          "type": "text",
           "label": {
             "de": "API-Key",
             "en": "API key"

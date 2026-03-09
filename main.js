@@ -228,9 +228,7 @@ class CptAdapter extends utils.Adapter {
             travelMode: 'car',
             routeType: 'fastest',
         };
-        if (this.tomtomTraffic) {
-            params.traffic = 'true';
-        }
+        params.traffic = this.tomtomTraffic ? 'true' : 'false';
 
         try {
             const resp = await axios.get(url, {
