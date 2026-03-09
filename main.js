@@ -207,7 +207,10 @@ class CptAdapter extends utils.Adapter {
             travelTimeSec: null,
         };
 
-        if (!this.getTomTomEnabled()) return fallback;
+        if (!this.getTomTomEnabled()) {
+            this.log.debug('keinen TomTom API-Key konfiguriert -> Luftlinie aktiv');
+            return fallback;
+        }
 
         const cacheMin = Number.isFinite(this.tomtomCacheMin) ? Number(this.tomtomCacheMin) : 10;
         const cacheKey = this.makeTomTomCacheKey(lat1, lon1, lat2, lon2);
@@ -225,7 +228,6 @@ class CptAdapter extends utils.Adapter {
             travelMode: 'car',
             routeType: 'fastest',
             traffic: this.tomtomTraffic ? 'true' : 'false',
-            routeRepresentation: 'none',
             computeTravelTimeFor: 'all',
             departAt: 'now',
         };
@@ -252,6 +254,7 @@ class CptAdapter extends utils.Adapter {
                         m: Math.round(m),
                         travelTimeSec: Number.isFinite(travelTimeSec) ? travelTimeSec : null,
                     };
+                    this.log.debug(`Distanz via TomTom Routing API berechnet: ${value.km.toFixed(2)} km (${Math.round(m)} m)`);
                     if (cacheMin > 0) {
                         this.tomtomDistanceCache.set(cacheKey, {
                             expires: now + (cacheMin * 60 * 1000),
@@ -271,7 +274,10 @@ class CptAdapter extends utils.Adapter {
             } else {
                 this.log.debug(`TomTom Routing fehlgeschlagen, fallback Luftlinie: ${e.message}`);
             }
-            return fallback;
+            return {
+                ...fallback,
+                source: 'fallback',
+            };
         }
     }
 
@@ -283,6 +289,19 @@ class CptAdapter extends utils.Adapter {
             return true;
         }
         return false;
+    }
+
+    async updateDistanceSourceStates(source, stationPrefixRel = null) {
+        try {
+            if (source) {
+                await this.updateStateIfChanged('tools.distanceSource', source);
+            }
+            if (stationPrefixRel && source) {
+                await this.updateStateIfChanged(`${stationPrefixRel}.distanceType`, source);
+            }
+        } catch (e) {
+            this.log.debug(`distance source state update fehlgeschlagen: ${e.message}`);
+        }
     }
 
     async updateStatusAgeMin(stationPrefixRel) {
@@ -541,11 +560,18 @@ class CptAdapter extends utils.Adapter {
             native: {},
         });
 
+        await this.setObjectNotExistsAsync('tools.distanceSource', {
+            type: 'state',
+            common: { name: 'Distanzquelle (letzte Berechnung)', type: 'string', role: 'text', read: true, write: false, def: 'airline' },
+            native: {},
+        });
+
         await this.setStateAsync('tools.export', { val: false, ack: true });
         await this.setStateAsync('tools.testNotify', { val: false, ack: true });
         await this.setStateAsync('tools.testNotifyAll', { val: false, ack: true });
         await this.setStateAsync('tools.refreshNow', { val: false, ack: true });
         await this.setStateAsync('tools.refreshRunning', { val: false, ack: true });
+        await this.setStateAsync('tools.distanceSource', { val: this.getTomTomEnabled() ? 'tomtom' : 'airline', ack: true });
     }
 
     async ensureCarObjects() {
@@ -586,6 +612,7 @@ class CptAdapter extends utils.Adapter {
         await mk('address', { name: 'Adresse', type: 'string', role: 'text', read: true, write: false });
         await mk('distance.m', { name: 'Distanz (m)', type: 'number', role: 'value.distance', unit: 'm', read: true, write: false });
         await mk('distance.km', { name: 'Distanz (km)', type: 'number', role: 'value.distance', unit: 'km', read: true, write: false });
+        await mk('distanceType', { name: 'Distanzquelle', type: 'string', role: 'text', read: true, write: false });
         await mk('freePorts', { name: 'Freie Ports', type: 'number', role: 'value', read: true, write: false });
         await mk('portCount', { name: 'Ports gesamt', type: 'number', role: 'value', read: true, write: false });
         await mk('lat', { name: 'Latitude', type: 'number', role: 'value.gps.latitude', read: true, write: false });
@@ -852,8 +879,10 @@ class CptAdapter extends utils.Adapter {
             let distM = parseNumberLocale(nearest.__distanceM ?? nearest.distance ?? nearest.distance_m ?? nearest.distanceMeters ?? nearest.distance_meters);
             const stLat = parseNumberLocale(nearest.lat ?? nearest.latitude);
             const stLon = parseNumberLocale(nearest.lon ?? nearest.longitude);
+            let nearestDistanceType = this.getTomTomEnabled() ? 'fallback' : 'airline';
             if (Number.isFinite(stLat) && Number.isFinite(stLon)) {
                 const distInfo = await this.getDistanceInfo(lat, lon, stLat, stLon);
+                nearestDistanceType = String(distInfo?.source || nearestDistanceType);
                 if (Number.isFinite(Number(distInfo?.m))) {
                     distM = Number(distInfo.m);
                 } else if (!Number.isFinite(distM)) {
@@ -877,6 +906,8 @@ class CptAdapter extends utils.Adapter {
                 await this.setStateAsync('nearestType2.distance.m', { val: Math.round(distM), ack: true });
                 await this.setStateAsync('nearestType2.distance.km', { val: Math.round((distM / 1000) * 100) / 100, ack: true });
             }
+            await this.setStateAsync('nearestType2.distanceType', { val: nearestDistanceType, ack: true });
+            await this.updateDistanceSourceStates(nearestDistanceType);
             if (Number.isFinite(freePorts)) await this.setStateAsync('nearestType2.freePorts', { val: Math.round(freePorts), ack: true });
             if (Number.isFinite(portCount)) await this.setStateAsync('nearestType2.portCount', { val: Math.round(portCount), ack: true });
             if (Number.isFinite(latS)) await this.setStateAsync('nearestType2.lat', { val: latS, ack: true });
@@ -1089,6 +1120,7 @@ class CptAdapter extends utils.Adapter {
             ['statusAgeMin', { name: 'Status seit (Minuten)', type: 'number', role: 'value.interval', unit: 'min', read: true, write: false }],
             ['portCount', { name: 'Anzahl Ports', type: 'number', role: 'value', read: true, write: false }],
             ['freePorts', { name: 'Freie Ports', type: 'number', role: 'value', read: true, write: false }],
+            ['distanceType', { name: 'Distanzquelle', type: 'string', role: 'text', read: true, write: false }],
             ['lastUpdate', { name: 'Letztes Update', type: 'string', role: 'date', read: true, write: false }],
         ];
 
@@ -1132,6 +1164,10 @@ class CptAdapter extends utils.Adapter {
         await this.setStateAsync(`${stationPrefix}.deviceId1`, { val: String(station.deviceId1 ?? ''), ack: true });
         await this.setStateAsync(`${stationPrefix}.deviceId2`, { val: station.deviceId2 ? String(station.deviceId2) : '', ack: true });
         await this.setStateAsync(`${stationPrefix}.enabled`, { val: !!station.enabled, ack: true });
+        const curDistanceType = await this.getStateAsync(`${stationPrefix}.distanceType`).catch(() => null);
+        if (!curDistanceType || curDistanceType.val === null || curDistanceType.val === undefined || curDistanceType.val === '') {
+            await this.setStateAsync(`${stationPrefix}.distanceType`, { val: this.getTomTomEnabled() ? 'tomtom' : 'airline', ack: true });
+        }
 
         // default valid=true; will be updated on poll based on real API data
         const curValid = await this.getStateAsync(`${stationPrefix}.valid`).catch(() => null);
@@ -1357,6 +1393,7 @@ class CptAdapter extends utils.Adapter {
                 // clear distance if previously set
                 await this.updateStateIfChanged(`${stationPrefixRel}.distance.km`, null);
                 await this.updateStateIfChanged(`${stationPrefixRel}.distance.m`, null);
+                await this.updateStateIfChanged(`${stationPrefixRel}.distanceType`, 'unknown');
                 return;
             }
             const dist = await this.getDistanceInfo(latCar, lonCar, Number(gps.lat), Number(gps.lon));
@@ -1366,6 +1403,7 @@ class CptAdapter extends utils.Adapter {
             const kmRound = Math.round(km * 100) / 100;
             await this.updateStateIfChanged(`${stationPrefixRel}.distance.km`, kmRound);
             await this.updateStateIfChanged(`${stationPrefixRel}.distance.m`, Math.round(m));
+            await this.updateDistanceSourceStates(String(dist?.source || 'airline'), stationPrefixRel);
         } catch (e) {
             this.log.debug(`Distanzberechnung fehlgeschlagen (${stationPrefixRel}): ${e.message}`);
         }
