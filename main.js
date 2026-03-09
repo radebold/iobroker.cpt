@@ -4,7 +4,7 @@ const utils = require('@iobroker/adapter-core');
 const axios = require('axios');
 const IO_PKG = require('./io-package.json');
 const VERSION = (IO_PKG && IO_PKG.common && IO_PKG.common.version) ? IO_PKG.common.version : '0.0.0';
-const TOMTOM_LOGO_DATA_URI = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABYAAAAfCAYAAADjuz3zAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAJcEhZcwAADsMAAA7DAcdvqGQAAAKzSURBVEhL1ZRdSFNhHMafbepxDax9hM5tFuTHVZiJ5kUUZVIoJEreSEQXQRdBUBcKOSGFKEHIq4QkIoKQCDFQFCIhpAuRiCBtanQsmVptc+k+8uzj7aI8vf93mxPJi34weJ/f/93D2c57joYxxrADaEXxr/j/ijWb/ccsHEJwcADB0SEo01OIeT3IKipBdmUVDI1NkMrKxa+opCwOPOuH76YTcf+KOFLRV9fA0nUXujyrOEpe7OtwYrWvV9RJ0ZrMsA4MIbOwmHqSAKw9frjlUgCI+7z4erEZLLBGPCmOLbrh63DyCtqcHFh67sEx8Q77PrqRPzIGQ30j2ROdl7HSfYc4MA5vZzuTbSb1M19oZ5Evn/ktKuJeeX8uiwfW1Dm54vDLF3yEsbUNGY4C4jYwtrRBZ7P/FZEIwq/H1UiKo4tuPsJQd5ZkHo0kwXC6lrjI3Ky6JsUsGuEjdGYLySLir+GPJikWi5RZF8kiytR7knWWveqaFEsHS/kIf083yTxR+ROCQ8+Jkw4dVtek2NDYxEeERod/H79olHhlegrL55vAfoZVl+EogFRZpeaEJ2+poRbrkxO8QuaBIkjlFdCZzVDmZhF+NQZE6P3IfdQPfXWNmhOKY8tLcJ86irjfz+tNybl8Bab2TuISHmldnhXWwRFk2B3iKCm7r16Hydkh6sQr3oCFgvjR14vVB/cR93npUKOB/tgJGFtuIKu0jM7+kLJYhTGsv30DxfUB8RUfMotLkF1xBNo9RnEnIX3xNklbHHj6BNGFBVHDUN+Q8A7mSVscGh3Gt0sXiNPl22Afn4RGkojnSTgVIrvO1EF//CRx5s7bm5YCwvs4FcqMi8kOC5NtJrbcfE4cJ2VLxYwx5mm9xmSHhSkzLnGUlC0Xxzzfma/rlqhTkvbmbZe0N2+77FjxL9efIBCGzcxQAAAAAElFTkSuQmCC';
+const TOMTOM_LOGO_PATH = '/adapter/cpt/_icons/tomtom.png';
 
 
 function parseNumberLocale(v) {
@@ -1701,7 +1701,7 @@ async cleanupObsoleteStations(currentPrefixes) {
             return st ? st.val : undefined;
         };
 
-        const tomtomDistanceHtml = (text) => `<span style="display:inline-flex;align-items:center;gap:4px;"><img src="${TOMTOM_LOGO_DATA_URI}" style="height:16px;width:auto;vertical-align:-3px;">${esc(text)}</span>`;
+        const tomtomDistanceHtml = (text) => `<span style="display:inline-flex;align-items:center;gap:4px;"><img src="${TOMTOM_LOGO_PATH}" style="height:16px;width:auto;vertical-align:-3px;">${esc(text)}</span>`;
 
         const updated = new Date().toLocaleString('de-DE');
         let out = `
@@ -1926,7 +1926,7 @@ async cleanupObsoleteStations(currentPrefixes) {
             return st ? st.val : undefined;
         };
 
-        const tomtomDistanceHtml = (text) => `<span style="display:inline-flex;align-items:center;gap:4px;"><img src="${TOMTOM_LOGO_DATA_URI}" style="height:16px;width:auto;vertical-align:-3px;">${esc(text)}</span>`;
+        const tomtomDistanceHtml = (text) => `<span style="display:inline-flex;align-items:center;gap:4px;"><img src="${TOMTOM_LOGO_PATH}" style="height:16px;width:auto;vertical-align:-3px;">${esc(text)}</span>`;
 
         // Human readable "age" from a timestamp (ms).
         // - show minutes for <= 100 minutes
