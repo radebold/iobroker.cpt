@@ -1726,8 +1726,9 @@ async cleanupObsoleteStations(currentPrefixes) {
         const stationsRoot = this.namespace + '.stations.';
         const stationStates = await this.getStatesAsync(stationsRoot + '*');
         const nearestStates = await this.getStatesAsync(this.namespace + '.nearestType2.*');
+        const toolStates = await this.getStatesAsync(this.namespace + '.tools.*');
 
-        const all = { ...(stationStates || {}), ...(nearestStates || {}) };
+        const all = { ...(stationStates || {}), ...(nearestStates || {}), ...(toolStates || {}) };
 
         const prefixesAll = Object.keys(stationStates || {})
             .filter((k) => k.endsWith('.name') && stationStates[k] && stationStates[k].val !== undefined)
@@ -1791,8 +1792,23 @@ async cleanupObsoleteStations(currentPrefixes) {
         };
 
         const tomtomDistanceHtml = (text) => `<span style="display:inline-flex;align-items:center;gap:4px;"><img src="${TOMTOM_LOGO_PATH}" style="height:16px;width:auto;vertical-align:-3px;">${esc(text)}</span>`;
+        const lastRefreshText = () => {
+            const ts = getVal('tools.lastRefresh');
+            if (!ts) return '—';
+            const ms = new Date(ts).getTime();
+            if (!Number.isFinite(ms)) return '—';
+            const diffMin = Math.max(0, Math.floor((Date.now() - ms) / 60000));
+            if (diffMin < 1) return 'gerade eben';
+            if (diffMin === 1) return 'vor 1 min';
+            if (diffMin < 60) return `vor ${diffMin} min`;
+            const h = Math.floor(diffMin / 60);
+            if (h === 1) return 'vor 1 h';
+            if (h < 24) return `vor ${h} h`;
+            const d = Math.floor(h / 24);
+            return d === 1 ? 'vor 1 Tag' : `vor ${d} Tagen`;
+        };
 
-        const updated = new Date().toLocaleString('de-DE');
+        const updated = lastRefreshText();
         let out = `
 <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;font-size:16px;">
   <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;gap:10px;">
@@ -1881,6 +1897,14 @@ async cleanupObsoleteStations(currentPrefixes) {
             const ageText = (ageMin !== undefined && ageMin !== null && ageMin !== '')
                 ? `seit ${esc(ageMin)} min`
                 : '';
+            const distM = getVal(p + '.distance.m');
+            const distanceType = getVal(p + '.distanceType');
+            let distanceText = '';
+            if (distM !== undefined && distM !== null && distM !== '' && !Number.isNaN(Number(distM))) {
+                const dNum = Number(distM);
+                const dLabel = dNum >= 1000 ? `${(dNum / 1000).toFixed(2)} km` : `${Math.round(dNum)} m`;
+                distanceText = distanceType === 'tomtom' ? tomtomDistanceHtml(dLabel) : esc(dLabel);
+            }
 
             // Ports (Variante 1 + 2)
             let dotsHtml = '';
@@ -1920,6 +1944,7 @@ async cleanupObsoleteStations(currentPrefixes) {
           ${portsText ? `<div style="opacity:.9;font-size:12px;font-weight:800;">${portsText}</div>` : ''}
           ${dotsHtml ? `<div style="margin-top:6px;line-height:1;">${dotsHtml}</div>` : ''}
           ${portsDetailText ? `<div style="opacity:.8;font-size:11px;margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(portsDetailText)}</div>` : ''}
+          ${distanceText ? `<div style="opacity:.9;font-size:12px;font-weight:800;margin-top:6px;">${distanceText}</div>` : ''}
           ${ageText ? `<div style="opacity:.65;font-size:11px;margin-top:6px;">${ageText}</div>` : ''}
         </div>
       </div>
@@ -1942,8 +1967,9 @@ async cleanupObsoleteStations(currentPrefixes) {
         const stationsRoot = this.namespace + '.stations.';
         const stationStates = await this.getStatesAsync(stationsRoot + '*');
         const nearestStates = await this.getStatesAsync(this.namespace + '.nearestType2.*');
+        const toolStates = await this.getStatesAsync(this.namespace + '.tools.*');
 
-        const all = { ...(stationStates || {}), ...(nearestStates || {}) };
+        const all = { ...(stationStates || {}), ...(nearestStates || {}), ...(toolStates || {}) };
 
         const prefixesAll = Object.keys(stationStates || {})
             .filter((k) => k.endsWith('.name') && stationStates[k] && stationStates[k].val !== undefined)
@@ -2016,6 +2042,21 @@ async cleanupObsoleteStations(currentPrefixes) {
         };
 
         const tomtomDistanceHtml = (text) => `<span style="display:inline-flex;align-items:center;gap:4px;"><img src="${TOMTOM_LOGO_PATH}" style="height:16px;width:auto;vertical-align:-3px;">${esc(text)}</span>`;
+        const lastRefreshText = () => {
+            const ts = getVal('tools.lastRefresh');
+            if (!ts) return '—';
+            const ms = new Date(ts).getTime();
+            if (!Number.isFinite(ms)) return '—';
+            const diffMin = Math.max(0, Math.floor((Date.now() - ms) / 60000));
+            if (diffMin < 1) return 'gerade eben';
+            if (diffMin === 1) return 'vor 1 min';
+            if (diffMin < 60) return `vor ${diffMin} min`;
+            const h = Math.floor(diffMin / 60);
+            if (h === 1) return 'vor 1 h';
+            if (h < 24) return `vor ${h} h`;
+            const d = Math.floor(h / 24);
+            return d === 1 ? 'vor 1 Tag' : `vor ${d} Tagen`;
+        };
 
         // Human readable "age" from a timestamp (ms).
         // - show minutes for <= 100 minutes
@@ -2031,14 +2072,14 @@ async cleanupObsoleteStations(currentPrefixes) {
             return `${diffMin} min`;
         };
 
-        const updated = new Date().toLocaleString('de-DE');
+        const updated = lastRefreshText();
         let out = `
 <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;font-size:14px;">
   <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;gap:10px;">
     <div style="display:flex;align-items:baseline;gap:8px;"><span style="font-weight:800;font-size:16px;">⚡ CPT</span><span style="font-weight:700;font-size:11px;opacity:.8;">${esc(VERSION)}</span></div>
     <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:flex-end;">
       <button onclick="(function(btn){ if (btn.dataset.busy === '1') return; btn.dataset.busy = '1'; btn.disabled = true; btn.style.background = '#777'; btn.style.cursor = 'default'; btn.innerHTML = '⏳ Refresh...'; vis.conn.setState('cpt.0.tools.refreshNow', true); var started = Date.now(); var reset = function(){ btn.dataset.busy = '0'; btn.disabled = false; btn.style.background = '#2b8cff'; btn.style.cursor = 'pointer'; btn.innerHTML = '🔄 Refresh'; }; var timer = setInterval(function(){ try { var v = (vis.states && typeof vis.states.attr === 'function') ? vis.states.attr('cpt.0.tools.refreshNow.val') : null; if (v === false || v === 'false' || v === 0 || v === '0') { clearInterval(timer); reset(); return; } } catch (e) {} if (Date.now() - started > 15000) { clearInterval(timer); reset(); } }, 500); })(this);" style="background:#2b8cff;border:none;color:white;padding:6px 12px;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;">🔄 Refresh</button>
-      <div style="opacity:.75;font-size:12px;">Update: ${esc(updated)}</div>
+      <div style="opacity:.75;font-size:12px;">${esc(updated)}</div>
     </div>
   </div>
 
@@ -2087,18 +2128,7 @@ async cleanupObsoleteStations(currentPrefixes) {
             return out;
         }
 
-        out += `
-    <table style="width:100%;border-collapse:collapse;">
-      <tr style="background:rgba(255,255,255,.06)">
-        <th style="text-align:left;padding:10px;font-size:12px;letter-spacing:.04em;opacity:.85;">ORT</th>
-        <th style="text-align:left;padding:10px;font-size:12px;letter-spacing:.04em;opacity:.85;">STATION</th>
-        <th style="text-align:left;padding:10px;font-size:12px;letter-spacing:.04em;opacity:.85;">STATUS</th>
-        <th style="text-align:left;padding:10px;font-size:12px;letter-spacing:.04em;opacity:.85;">PORTS</th>
-        <th style="text-align:left;padding:10px;font-size:12px;letter-spacing:.04em;opacity:.85;">DISTANZ</th>
-        <th style="text-align:left;padding:10px;font-size:12px;letter-spacing:.04em;opacity:.85;">ALTER</th>
-        <th style="text-align:left;padding:10px;font-size:12px;letter-spacing:.04em;opacity:.85;">GPS</th>
-      </tr>
-`;
+        out += `<div style="padding:10px;display:grid;gap:10px;">`;
 
         for (const p of prefixes) {
             const city = getVal(p + '.city') ?? '';
@@ -2156,11 +2186,19 @@ async cleanupObsoleteStations(currentPrefixes) {
                 ? `<a href="${mapsUrl}" target="_blank" style="color:inherit; text-decoration:underline; opacity:.95;">${esc(gpsLat)}, ${esc(gpsLon)}</a>`
                 : `<span style="opacity:.75;">—</span>`;
 
+            const dM = getVal(p + '.distance.m');
             const dKm = getVal(p + '.distance.km');
             const distanceType = getVal(p + '.distanceType');
-            const distText = (dKm !== undefined && dKm !== null && dKm !== '')
-                ? badge((distanceType === 'tomtom' ? tomtomDistanceHtml(`${dKm} km`) : `${dKm} km`), 'neutral')
-                : `<span style="opacity:.75;">—</span>`;
+            let dLabel = '';
+            if (dM !== undefined && dM !== null && dM !== '' && Number.isFinite(Number(dM))) {
+                const mVal = Number(dM);
+                dLabel = mVal < 1000 ? `${Math.round(mVal)} m` : `${(mVal / 1000).toFixed(2)} km`;
+            } else if (dKm !== undefined && dKm !== null && dKm !== '' && Number.isFinite(Number(dKm))) {
+                dLabel = `${Number(dKm).toFixed(2)} km`;
+            }
+            const distText = dLabel
+                ? badge((distanceType === 'tomtom' ? tomtomDistanceHtml(dLabel) : dLabel), 'neutral')
+                : badge('—', 'neutral');
 
             // Age: prefer latest port status timestamp; fallback to derived status timestamp
             let ageTs = newestPortTs;
@@ -2171,20 +2209,23 @@ async cleanupObsoleteStations(currentPrefixes) {
             const ageBadge = badge(`vor ${ageText(ageTs)}`, 'neutral');
 
             out += `
-      <tr style="border-top:1px solid rgba(255,255,255,.08)">
-        <td style="padding:10px;vertical-align:top;">${esc(city)}</td>
-        <td style="padding:10px;vertical-align:top;font-weight:700;">${esc(name)}</td>
-        <td style="padding:10px;vertical-align:top;">${badge(st || '—', kindFromStatus(st))}</td>
-        <td style="padding:10px;vertical-align:top;">${portsSummary}<div style="margin-top:6px;line-height:1.8;">${portText}</div></td>
-        <td style="padding:10px;vertical-align:top;">${distText}</td>
-        <td style="padding:10px;vertical-align:top;">${ageBadge}</td>
-        <td style="padding:10px;vertical-align:top;">${gpsText}</td>
-      </tr>
+      <div style="border:1px solid rgba(255,255,255,.08);border-radius:12px;padding:12px;background:rgba(255,255,255,.03);">
+        <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:10px;">
+          <div style="min-width:0;">
+            <div style="font-size:12px;opacity:.75;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(city)}</div>
+            <div style="margin-top:2px;font-size:15px;font-weight:800;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(name)}</div>
+          </div>
+          <div style="flex:0 0 auto;">${badge(st || '—', kindFromStatus(st))}</div>
+        </div>
+        <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap;">${portsSummary}${distText}${ageBadge}</div>
+        <div style="margin-top:8px;line-height:1.8;">${portText}</div>
+        <div style="margin-top:8px;font-size:12px;opacity:.9;word-break:break-word;">${gpsText}</div>
+      </div>
 `;
         }
 
         out += `
-    </table>
+    </div>
   </div>
 </div>`;
         return out;
