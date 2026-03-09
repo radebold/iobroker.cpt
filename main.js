@@ -44,6 +44,7 @@ class CptAdapter extends utils.Adapter {
         // transition detection (per stationPrefix)
         this.lastFreePortsByStation = {};
         this.stationPrefixByName = {};
+        this.enabledStations = [];
         this.stationPrefixByDeviceId = {};
 
         // car position (optional) - can be sourced from foreign states
@@ -404,9 +405,21 @@ class CptAdapter extends utils.Adapter {
             native: {},
         });
 
+        await this.setObjectNotExistsAsync('tools.lastTest', {
+            type: 'state',
+            common: { name: 'Letzter Test', type: 'string', role: 'date', read: true, write: false },
+            native: {},
+        });
+
+        await this.setObjectNotExistsAsync('tools.lastTestResult', {
+            type: 'state',
+            common: { name: 'Letztes Testergebnis', type: 'string', role: 'text', read: true, write: false },
+            native: {},
+        });
+
         await this.setObjectNotExistsAsync('tools.refreshNow', {
             type: 'state',
-            common: { name: 'Manueller Refresh (Trigger)', type: 'boolean', role: 'button', read: true, write: true, def: false },
+            common: { name: 'Refresh jetzt (Trigger)', type: 'boolean', role: 'button', read: true, write: true, def: false },
             native: {},
         });
 
@@ -419,18 +432,6 @@ class CptAdapter extends utils.Adapter {
         await this.setObjectNotExistsAsync('tools.lastRefreshResult', {
             type: 'state',
             common: { name: 'Letztes Refresh-Ergebnis', type: 'string', role: 'text', read: true, write: false },
-            native: {},
-        });
-
-        await this.setObjectNotExistsAsync('tools.lastTest', {
-            type: 'state',
-            common: { name: 'Letzter Test', type: 'string', role: 'date', read: true, write: false },
-            native: {},
-        });
-
-        await this.setObjectNotExistsAsync('tools.lastTestResult', {
-            type: 'state',
-            common: { name: 'Letztes Testergebnis', type: 'string', role: 'text', read: true, write: false },
             native: {},
         });
 
@@ -1497,19 +1498,17 @@ async cleanupObsoleteStations(currentPrefixes) {
         };
 
         const updated = new Date().toLocaleString('de-DE');
-        const lastRefreshRaw = getVal('tools.lastRefresh') ?? '';
-        const lastRefresh = lastRefreshRaw ? esc(new Date(lastRefreshRaw).toLocaleString('de-DE')) : '—';
+        const version = require('./io-package.json').common.version;
+        const lastRefresh = getVal('tools.lastRefresh') ?? '';
         let out = `
 <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;font-size:16px;">
   <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:10px;margin-bottom:10px;">
     <div>
-      <div style="font-weight:900;font-size:18px;">⚡ CPT ${esc(this.version)}</div>
-      <div style="opacity:.7;font-size:11px;margin-top:2px;">Letzter Refresh: ${lastRefresh}</div>
+      <div style="font-weight:900;font-size:18px;">⚡ CPT ${esc(version)}</div>
+      <div style="opacity:.7;font-size:12px;">${esc(updated)}</div>
+      ${lastRefresh ? `<div style="opacity:.7;font-size:11px;margin-top:2px;">Refresh: ${esc(lastRefresh)}</div>` : ''}
     </div>
-    <div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px;">
-      <button onclick="this.style.background='#777';this.innerHTML='⏳ Refresh...';if(window.vis&&vis.conn){vis.conn.setState('cpt.0.tools.refreshNow',true);}else if(window.parent&&window.parent.vis&&window.parent.vis.conn){window.parent.vis.conn.setState('cpt.0.tools.refreshNow',true);}" style="background:#2b8cff;border:none;color:white;padding:6px 12px;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;">🔄 Refresh</button>
-      <div style="opacity:.7;font-size:11px;">${esc(updated)}</div>
-    </div>
+    <button onclick="this.style.background='#777';this.innerHTML='⏳ Refresh...';if(window.vis&&vis.conn){vis.conn.setState('cpt.0.tools.refreshNow', true);}else if(window.parent&&window.parent.vis&&window.parent.vis.conn){window.parent.vis.conn.setState('cpt.0.tools.refreshNow', true);}" style="background:#2b8cff;border:none;color:white;padding:6px 12px;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap;">🔄 Refresh</button>
   </div>
 
   ${(() => {
@@ -1588,6 +1587,7 @@ async cleanupObsoleteStations(currentPrefixes) {
             const ageText = (ageMin !== undefined && ageMin !== null && ageMin !== '')
                 ? `seit ${esc(ageMin)} min`
                 : '';
+            const lastRefreshShort = lastRefresh ? String(lastRefresh).replace('T', ' ').replace('Z', '') : '';
 
             // Ports (Variante 1 + 2)
             let dotsHtml = '';
@@ -1628,7 +1628,7 @@ async cleanupObsoleteStations(currentPrefixes) {
           ${dotsHtml ? `<div style="margin-top:6px;line-height:1;">${dotsHtml}</div>` : ''}
           ${portsDetailText ? `<div style="opacity:.8;font-size:11px;margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(portsDetailText)}</div>` : ''}
           ${ageText ? `<div style="opacity:.65;font-size:11px;margin-top:6px;">${ageText}</div>` : ''}
-          <div style="opacity:.55;font-size:10px;margin-top:4px;">Refresh: ${lastRefresh}</div>
+          ${lastRefreshShort ? `<div style="opacity:.55;font-size:10px;margin-top:4px;">Refresh: ${esc(lastRefreshShort)}</div>` : ''}
         </div>
       </div>
     </div>
@@ -1737,20 +1737,16 @@ async cleanupObsoleteStations(currentPrefixes) {
         };
 
         const updated = new Date().toLocaleString('de-DE');
-        const lastRefreshRaw = getVal('tools.lastRefresh') ?? '';
-        const lastRefresh = lastRefreshRaw ? esc(new Date(lastRefreshRaw).toLocaleString('de-DE')) : '—';
+        const version = require('./io-package.json').common.version;
+        const lastRefresh = getVal('tools.lastRefresh') ?? '';
         let out = `
-<div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;font-size:13px;line-height:1.2;">
-  <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:10px;margin-bottom:8px;">
-    <div>
-      <div style="font-weight:800;font-size:16px;">⚡ CPT ${esc(this.version)}</div>
-      <div style="opacity:.75;font-size:11px;">Letzter Refresh: ${lastRefresh}</div>
+<div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;font-size:14px;">
+  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;gap:10px;">
+    <div style="font-weight:800;font-size:16px;">⚡ CPT ${esc(version)}</div>
+    <div style="display:flex;align-items:center;gap:10px;">
+      <div style="opacity:.75;font-size:12px;">Update: ${esc(updated)}${lastRefresh ? ` · Refresh: ${esc(lastRefresh)}` : ''}</div>
+      <button onclick="this.style.background='#777';this.innerHTML='⏳ Refresh...';if(window.vis&&vis.conn){vis.conn.setState('cpt.0.tools.refreshNow', true);}else if(window.parent&&window.parent.vis&&window.parent.vis.conn){window.parent.vis.conn.setState('cpt.0.tools.refreshNow', true);}" style="background:#2b8cff;border:none;color:white;padding:4px 10px;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap;">🔄 Refresh</button>
     </div>
-    <div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px;">
-      <button onclick="this.style.background='#777';this.innerHTML='⏳ Refresh...';vis.conn.setState('cpt.0.tools.refreshNow', true);" style="background:#2b8cff;border:none;color:white;padding:4px 10px;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;">🔄 Refresh</button>
-      <div style="opacity:.75;font-size:11px;">Update: ${esc(updated)}</div>
-    </div>
-  </div>
 
   ${(() => {
       const nName  = getVal('nearestType2.name') ?? '';
@@ -1798,13 +1794,13 @@ async cleanupObsoleteStations(currentPrefixes) {
         out += `
     <table style="width:100%;border-collapse:collapse;">
       <tr style="background:rgba(255,255,255,.06)">
-        <th style="text-align:left;padding:6px 8px;font-size:11px;letter-spacing:.04em;opacity:.85;">ORT</th>
-        <th style="text-align:left;padding:6px 8px;font-size:11px;letter-spacing:.04em;opacity:.85;">STATION</th>
-        <th style="text-align:left;padding:6px 8px;font-size:11px;letter-spacing:.04em;opacity:.85;">STATUS</th>
-        <th style="text-align:left;padding:6px 8px;font-size:11px;letter-spacing:.04em;opacity:.85;">PORTS</th>
-        <th style="text-align:left;padding:6px 8px;font-size:11px;letter-spacing:.04em;opacity:.85;">DISTANZ</th>
-        <th style="text-align:left;padding:6px 8px;font-size:11px;letter-spacing:.04em;opacity:.85;">ALTER</th>
-        <th style="text-align:left;padding:6px 8px;font-size:11px;letter-spacing:.04em;opacity:.85;">GPS</th>
+        <th style="text-align:left;padding:10px;font-size:12px;letter-spacing:.04em;opacity:.85;">ORT</th>
+        <th style="text-align:left;padding:10px;font-size:12px;letter-spacing:.04em;opacity:.85;">STATION</th>
+        <th style="text-align:left;padding:10px;font-size:12px;letter-spacing:.04em;opacity:.85;">STATUS</th>
+        <th style="text-align:left;padding:10px;font-size:12px;letter-spacing:.04em;opacity:.85;">PORTS</th>
+        <th style="text-align:left;padding:10px;font-size:12px;letter-spacing:.04em;opacity:.85;">DISTANZ</th>
+        <th style="text-align:left;padding:10px;font-size:12px;letter-spacing:.04em;opacity:.85;">ALTER</th>
+        <th style="text-align:left;padding:10px;font-size:12px;letter-spacing:.04em;opacity:.85;">GPS</th>
       </tr>
 `;
 
@@ -1864,13 +1860,13 @@ async cleanupObsoleteStations(currentPrefixes) {
 
             out += `
       <tr style="border-top:1px solid rgba(255,255,255,.08)">
-        <td style="padding:6px 8px;vertical-align:top;">${esc(city)}</td>
-        <td style="padding:6px 8px;vertical-align:top;font-weight:700;">${esc(name)}</td>
-        <td style="padding:6px 8px;vertical-align:top;">${badge(st || '—', kindFromStatus(st))}</td>
-        <td style="padding:6px 8px;vertical-align:top;">${portsSummary}<div style="margin-top:4px;line-height:1.4;">${portText}</div></td>
-        <td style="padding:6px 8px;vertical-align:top;">${distText}</td>
-        <td style="padding:6px 8px;vertical-align:top;">${ageBadge}</td>
-        <td style="padding:6px 8px;vertical-align:top;">${gpsText}</td>
+        <td style="padding:10px;vertical-align:top;">${esc(city)}</td>
+        <td style="padding:10px;vertical-align:top;font-weight:700;">${esc(name)}</td>
+        <td style="padding:10px;vertical-align:top;">${badge(st || '—', kindFromStatus(st))}</td>
+        <td style="padding:10px;vertical-align:top;">${portsSummary}<div style="margin-top:6px;line-height:1.8;">${portText}</div></td>
+        <td style="padding:10px;vertical-align:top;">${distText}</td>
+        <td style="padding:10px;vertical-align:top;">${ageBadge}</td>
+        <td style="padding:10px;vertical-align:top;">${gpsText}</td>
       </tr>
 `;
         }
@@ -1881,26 +1877,6 @@ async cleanupObsoleteStations(currentPrefixes) {
 </div>`;
         return out;
     }
-
-    getConfiguredStations() {
-        return (Array.isArray(this.config?.stations) ? this.config.stations : [])
-            .filter((s) => s && typeof s === 'object')
-            .map((s, idx) => {
-                const deviceId1 = s.deviceId1 ?? s.stationId ?? s.deviceId ?? s.id;
-                const deviceId2 = s.deviceId2 ?? null;
-                const name = s.name || `station_${deviceId1 || idx + 1}`;
-                const enabled = (s.enabled == undefined || s.enabled == null) ? true : isTrue(s.enabled);
-                return {
-                    name,
-                    enabled,
-                    notifyOnAvailable: s.notifyOnAvailable === true,
-                    deviceId1: deviceId1 ? Number(deviceId1) : null,
-                    deviceId2: deviceId2 ? Number(deviceId2) : null,
-                };
-            })
-            .filter((s) => !!s.deviceId1);
-    }
-
 
 async onReady() {
         this.log.info('Adapter CPT gestartet');
@@ -1944,13 +1920,31 @@ async onReady() {
 
         const intervalMin = Number(this.config.interval) || 5;
 
-        const stations = this.getConfiguredStations();
+        const stations = (Array.isArray(this.config.stations) ? this.config.stations : [])
+            .filter((s) => s && typeof s === 'object')
+            .map((s, idx) => {
+                const deviceId1 = s.deviceId1 ?? s.stationId ?? s.deviceId ?? s.id;
+                const deviceId2 = s.deviceId2 ?? null;
+                const name = s.name || `station_${deviceId1 || idx + 1}`;
+                // Enabled can be boolean/number/string from admin JSON config
+                const enabled = (s.enabled == undefined || s.enabled == null) ? true : isTrue(s.enabled);
+                return {
+                    name,
+                    enabled,
+                    notifyOnAvailable: s.notifyOnAvailable === true,
+                    deviceId1: deviceId1 ? Number(deviceId1) : null,
+                    deviceId2: deviceId2 ? Number(deviceId2) : null,
+                };
+            })
+            .filter((s) => !!s.deviceId1);
 
         const enabledStations = stations.filter((s) => {
             // Backward compatible default: if the flag was not present in older configs, treat as enabled
             if (s.enabled === undefined || s.enabled === null || s.enabled === '') return true;
             return isTrue(s.enabled);
         });
+
+        this.enabledStations = enabledStations;
 
         if (!enabledStations.length) {
             this.log.warn('Keine aktiven Stationen konfiguriert (enabled=false)');
@@ -2010,31 +2004,26 @@ async onReady() {
 
         if (state.ack) return;
 
-        if (id === `${this.namespace}.tools.refreshNow` && state.val === true) {
-            try {
-                const stations = this.getConfiguredStations();
-                const enabledStations = stations.filter((s) => s.enabled !== false);
-                if (enabledStations.length) {
-                    await this.updateAllStations(enabledStations);
-                    await this.setStateAsync('tools.lastRefreshResult', { val: 'ok', ack: true });
-                } else {
-                    await this.setStateAsync('tools.lastRefreshResult', { val: 'no active stations', ack: true });
-                }
-                await this.setStateAsync('tools.lastRefresh', { val: new Date().toISOString(), ack: true });
-                await this.writeVisHtmlObject();
-                await this.writeVisHtmlMobileObject();
-            } catch (e) {
-                await this.setStateAsync('tools.lastRefreshResult', { val: String(e.message || e), ack: true });
-                this.log.warn(`Manueller Refresh fehlgeschlagen: ${e.message}`);
-            } finally {
-                await this.setStateAsync('tools.refreshNow', { val: false, ack: true });
-            }
-            return;
-        }
-
         if (id === `${this.namespace}.tools.export` && state.val === true) {
             await this.doExportStations();
             await this.setStateAsync('tools.export', { val: false, ack: true });
+            return;
+        }
+
+        if (id === `${this.namespace}.tools.refreshNow` && state.val === true) {
+            try {
+                if (Array.isArray(this.enabledStations) && this.enabledStations.length) {
+                    await this.updateAllStations(this.enabledStations);
+                    await this.setStateAsync('tools.lastRefresh', { val: new Date().toISOString(), ack: true });
+                    await this.setStateAsync('tools.lastRefreshResult', { val: 'ok', ack: true });
+                } else {
+                    await this.setStateAsync('tools.lastRefreshResult', { val: 'keine aktiven Stationen', ack: true });
+                }
+            } catch (e) {
+                await this.setStateAsync('tools.lastRefreshResult', { val: e.message, ack: true });
+            } finally {
+                await this.setStateAsync('tools.refreshNow', { val: false, ack: true });
+            }
             return;
         }
 
@@ -2063,6 +2052,7 @@ async onReady() {
                 this.log.warn(`TEST Notify ALL fehlgeschlagen: ${e.message}`);
             } finally {
                 await this.setStateAsync('tools.testNotifyAll', { val: false, ack: true });
+        await this.setStateAsync('tools.refreshNow', { val: false, ack: true });
             }
             return;
         }
