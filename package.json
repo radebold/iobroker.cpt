@@ -1,6 +1,6 @@
 {
   "name": "iobroker.cpt",
-  "version": "0.7.9",
+  "version": "0.6.37",
   "description": "ioBroker adapter for ChargePoint charging stations status",
   "main": "main.js",
   "author": "radebold <radebold@gmail.com>",
@@ -8,10 +8,5 @@
   "dependencies": {
     "@iobroker/adapter-core": "^3.2.3",
     "axios": "^1.7.2"
-  },
-  "scripts": {
-    "version:sync": "node scripts/sync-version.js",
-    "release:alpha": "npm version prerelease --preid=alpha --no-git-tag-version && npm run version:sync",
-    "release:patch": "npm version patch --no-git-tag-version && npm run version:sync"
   }
 }

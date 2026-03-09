@@ -2,9 +2,7 @@
 
 const utils = require('@iobroker/adapter-core');
 const axios = require('axios');
-const IO_PKG = require('./io-package.json');
-const VERSION = (IO_PKG && IO_PKG.common && IO_PKG.common.version) ? IO_PKG.common.version : '0.0.0';
-const TOMTOM_LOGO_PATH = '/adapter/cpt/tomtom.png';
+const VERSION = require('./io-package.json').common.version;
 
 
 function parseNumberLocale(v) {
@@ -23,29 +21,6 @@ function parseNumberLocale(v) {
 
 function isTrue(v) {
     return v === true || v === 'true' || v === 1 || v === '1' || v === 'on' || v === 'yes';
-}
-
-
-function parseConnectedState(v) {
-    if (v === null || v === undefined || v === '') return null;
-    if (typeof v === 'boolean') return v;
-    if (typeof v === 'number') return v !== 0;
-    const s = String(v).trim().toLowerCase();
-    if (!s) return null;
-    if (['true', '1', 'yes', 'on', 'connected', 'plugged', 'plugged_in', 'pluggedin', 'attached'].includes(s)) return true;
-    if (['false', '0', 'no', 'off', 'disconnected', 'unplugged', 'detached', 'not_connected'].includes(s)) return false;
-    return null;
-}
-
-function parseChargingState(v) {
-    if (v === null || v === undefined || v === '') return null;
-    if (typeof v === 'boolean') return v;
-    if (typeof v === 'number') return v !== 0;
-    const s = String(v).trim().toLowerCase();
-    if (!s) return null;
-    if (['true', '1', 'yes', 'on', 'charging', 'inprogress', 'in_progress', 'running', 'active'].includes(s)) return true;
-    if (['false', '0', 'no', 'off', 'not_charging', 'notcharging', 'idle', 'stopped', 'complete', 'completed', 'done'].includes(s)) return false;
-    return null;
 }
 
 class CptAdapter extends utils.Adapter {
@@ -79,21 +54,8 @@ class CptAdapter extends utils.Adapter {
         this.carLatStateId = (this.config && this.config.carLatStateId) ? String(this.config.carLatStateId).trim() : '';
         this.carLonStateId = (this.config && this.config.carLonStateId) ? String(this.config.carLonStateId).trim() : '';
         this.carSocStateId = (this.config && this.config.carSocStateId) ? String(this.config.carSocStateId).trim() : '';
-        this.carConnectedStateId = (this.config && this.config.carConnectedStateId) ? String(this.config.carConnectedStateId).trim() : '';
-        this.carChargingStateId = (this.config && this.config.carChargingStateId) ? String(this.config.carChargingStateId).trim() : '';
-        this.carConnected = null;
-        this.carCharging = null;
         this.carLatStatic = (this.config && this.config.carLat !== undefined && this.config.carLat !== null && this.config.carLat !== '') ? Number(this.config.carLat) : null;
         this.carLonStatic = (this.config && this.config.carLon !== undefined && this.config.carLon !== null && this.config.carLon !== '') ? Number(this.config.carLon) : null;
-
-        // optional TomTom route distance (fallback remains haversine)
-        this.tomtomApiKey = (this.config && this.config.tomtomApiKey) ? String(this.config.tomtomApiKey).trim() : '';
-        this.tomtomTraffic = (this.config && this.config.tomtomTraffic !== undefined) ? isTrue(this.config.tomtomTraffic) : true;
-        this.tomtomCacheMin = (this.config && this.config.tomtomCacheMin !== undefined && this.config.tomtomCacheMin !== null && this.config.tomtomCacheMin !== '')
-            ? Number(this.config.tomtomCacheMin)
-            : 10;
-        this.tomtomDistanceCache = new Map();
-        this.tomtomWarned = false;
 
         // Notification filters
         this.notifySocBelow = (this.config && this.config.notifySocBelow !== undefined && this.config.notifySocBelow !== null && this.config.notifySocBelow !== '')
@@ -115,9 +77,6 @@ class CptAdapter extends utils.Adapter {
         this.lastPortStatusByKey = {}; // { ["stations.<city>.<station>|<outlet>"]: "available"|... }
         this.stationPrefixes = [];
         this.enabledStations = [];
-        this.refreshRunning = false;
-        this.lastManualRefreshTs = 0;
-        this.refreshMinGapMs = 5000;
 
         // remember which incomplete stations were already warned (avoid log spam)
         this.invalidStationWarned = new Set();
@@ -217,96 +176,6 @@ class CptAdapter extends utils.Adapter {
         return R * c;
     }
 
-    getTomTomEnabled() {
-        return !!(this.tomtomApiKey && String(this.tomtomApiKey).trim());
-    }
-
-    makeTomTomCacheKey(lat1, lon1, lat2, lon2) {
-        const r = (n) => Number(n).toFixed(5);
-        return `${r(lat1)},${r(lon1)}>${r(lat2)},${r(lon2)}`;
-    }
-
-    async getDistanceInfo(lat1, lon1, lat2, lon2) {
-        const fallbackKm = this.haversineKm(lat1, lon1, lat2, lon2);
-        const fallback = {
-            source: 'airline',
-            km: Number.isFinite(fallbackKm) ? fallbackKm : null,
-            m: Number.isFinite(fallbackKm) ? Math.round(fallbackKm * 1000) : null,
-            travelTimeSec: null,
-        };
-
-        if (!this.getTomTomEnabled()) {
-            this.log.debug('keinen TomTom API-Key konfiguriert -> Luftlinie aktiv');
-            return fallback;
-        }
-
-        const cacheMin = Number.isFinite(this.tomtomCacheMin) ? Number(this.tomtomCacheMin) : 10;
-        const cacheKey = this.makeTomTomCacheKey(lat1, lon1, lat2, lon2);
-        const now = Date.now();
-        if (cacheMin > 0 && this.tomtomDistanceCache.has(cacheKey)) {
-            const cached = this.tomtomDistanceCache.get(cacheKey);
-            if (cached && cached.expires > now) return cached.value;
-            this.tomtomDistanceCache.delete(cacheKey);
-        }
-
-        const locs = `${Number(lat1)},${Number(lon1)}:${Number(lat2)},${Number(lon2)}`;
-        const url = `https://api.tomtom.com/routing/1/calculateRoute/${locs}/json`;
-        const params = {
-            key: this.tomtomApiKey,
-            travelMode: 'car',
-            routeType: 'fastest',
-        };
-        params.traffic = this.tomtomTraffic ? 'true' : 'false';
-
-        try {
-            const resp = await axios.get(url, {
-                timeout: 20000,
-                params,
-                validateStatus: () => true,
-                headers: {
-                    'User-Agent': 'Mozilla/5.0 (iobroker.cpt)',
-                    Accept: 'application/json,text/plain,*/*',
-                },
-            });
-
-            if (resp.status >= 200 && resp.status < 300) {
-                const summary = resp?.data?.routes?.[0]?.summary;
-                const m = Number(summary?.lengthInMeters);
-                const travelTimeSec = Number(summary?.travelTimeInSeconds);
-                if (Number.isFinite(m) && m >= 0) {
-                    const value = {
-                        source: 'tomtom',
-                        km: m / 1000,
-                        m: Math.round(m),
-                        travelTimeSec: Number.isFinite(travelTimeSec) ? travelTimeSec : null,
-                    };
-                    this.log.debug(`Distanz via TomTom Routing API berechnet: ${value.km.toFixed(2)} km (${Math.round(m)} m)`);
-                    if (cacheMin > 0) {
-                        this.tomtomDistanceCache.set(cacheKey, {
-                            expires: now + (cacheMin * 60 * 1000),
-                            value,
-                        });
-                    }
-                    return value;
-                }
-            }
-
-            const errText = typeof resp?.data === 'string' ? resp.data : JSON.stringify(resp?.data || {});
-            throw new Error(`HTTP ${resp.status} ${errText}`.slice(0, 500));
-        } catch (e) {
-            if (!this.tomtomWarned) {
-                this.tomtomWarned = true;
-                this.log.warn(`TomTom Routing nicht nutzbar, falle auf Luftlinie zurück: ${e.message}`);
-            } else {
-                this.log.debug(`TomTom Routing fehlgeschlagen, fallback Luftlinie: ${e.message}`);
-            }
-            return {
-                ...fallback,
-                source: 'fallback',
-            };
-        }
-    }
-
     async updateStateIfChanged(id, val, ack = true) {
         const cur = await this.getStateAsync(id).catch(() => null);
         const curVal = cur ? cur.val : undefined;
@@ -315,19 +184,6 @@ class CptAdapter extends utils.Adapter {
             return true;
         }
         return false;
-    }
-
-    async updateDistanceSourceStates(source, stationPrefixRel = null) {
-        try {
-            if (source) {
-                await this.updateStateIfChanged('tools.distanceSource', source);
-            }
-            if (stationPrefixRel && source) {
-                await this.updateStateIfChanged(`${stationPrefixRel}.distanceType`, source);
-            }
-        } catch (e) {
-            this.log.debug(`distance source state update fehlgeschlagen: ${e.message}`);
-        }
     }
 
     async updateStatusAgeMin(stationPrefixRel) {
@@ -564,31 +420,19 @@ class CptAdapter extends utils.Adapter {
 
         await this.setObjectNotExistsAsync('tools.refreshNow', {
             type: 'state',
-            common: { name: 'Jetzt aktualisieren (Trigger)', type: 'boolean', role: 'button', read: true, write: true, def: false },
+            common: { name: 'Refresh jetzt', type: 'boolean', role: 'button', read: true, write: true, def: false },
             native: {},
         });
 
         await this.setObjectNotExistsAsync('tools.lastRefresh', {
             type: 'state',
-            common: { name: 'Letztes Refresh', type: 'string', role: 'date', read: true, write: false },
+            common: { name: 'Letzter Refresh', type: 'string', role: 'date', read: true, write: false },
             native: {},
         });
 
         await this.setObjectNotExistsAsync('tools.lastRefreshResult', {
             type: 'state',
-            common: { name: 'Letztes Refresh-Ergebnis', type: 'string', role: 'text', read: true, write: false },
-            native: {},
-        });
-
-        await this.setObjectNotExistsAsync('tools.refreshRunning', {
-            type: 'state',
-            common: { name: 'Refresh läuft', type: 'boolean', role: 'indicator.working', read: true, write: false, def: false },
-            native: {},
-        });
-
-        await this.setObjectNotExistsAsync('tools.distanceSource', {
-            type: 'state',
-            common: { name: 'Distanzquelle (letzte Berechnung)', type: 'string', role: 'text', read: true, write: false, def: 'airline' },
+            common: { name: 'Letztes Refresh Ergebnis', type: 'string', role: 'text', read: true, write: false },
             native: {},
         });
 
@@ -596,8 +440,6 @@ class CptAdapter extends utils.Adapter {
         await this.setStateAsync('tools.testNotify', { val: false, ack: true });
         await this.setStateAsync('tools.testNotifyAll', { val: false, ack: true });
         await this.setStateAsync('tools.refreshNow', { val: false, ack: true });
-        await this.setStateAsync('tools.refreshRunning', { val: false, ack: true });
-        await this.setStateAsync('tools.distanceSource', { val: this.getTomTomEnabled() ? 'tomtom' : 'airline', ack: true });
     }
 
     async ensureCarObjects() {
@@ -615,16 +457,6 @@ class CptAdapter extends utils.Adapter {
         await this.setObjectNotExistsAsync('car.soc', {
             type: 'state',
             common: { name: 'Auto Ladestand (SoC)', type: 'number', role: 'value.battery', unit: '%', read: true, write: false },
-            native: {},
-        });
-        await this.setObjectNotExistsAsync('car.connected', {
-            type: 'state',
-            common: { name: 'Auto verbunden', type: 'boolean', role: 'indicator.connected', read: true, write: false },
-            native: {},
-        });
-        await this.setObjectNotExistsAsync('car.charging', {
-            type: 'state',
-            common: { name: 'Auto lädt', type: 'boolean', role: 'indicator', read: true, write: false },
             native: {},
         });
         await this.setObjectNotExistsAsync('car.source', {
@@ -648,7 +480,6 @@ class CptAdapter extends utils.Adapter {
         await mk('address', { name: 'Adresse', type: 'string', role: 'text', read: true, write: false });
         await mk('distance.m', { name: 'Distanz (m)', type: 'number', role: 'value.distance', unit: 'm', read: true, write: false });
         await mk('distance.km', { name: 'Distanz (km)', type: 'number', role: 'value.distance', unit: 'km', read: true, write: false });
-        await mk('distanceType', { name: 'Distanzquelle', type: 'string', role: 'text', read: true, write: false });
         await mk('freePorts', { name: 'Freie Ports', type: 'number', role: 'value', read: true, write: false });
         await mk('portCount', { name: 'Ports gesamt', type: 'number', role: 'value', read: true, write: false });
         await mk('lat', { name: 'Latitude', type: 'number', role: 'value.gps.latitude', read: true, write: false });
@@ -726,58 +557,6 @@ class CptAdapter extends utils.Adapter {
 
         // also refresh nearest type2 (SoC change can trigger notifications / relevance)
         this.scheduleNearestType2Update('socChange');
-    }
-
-
-    async initCarConnected() {
-        if (!this.carConnectedStateId) return;
-        const st = await this.getForeignStateAsync(this.carConnectedStateId).catch(() => null);
-        const parsed = st && st.val !== undefined ? parseConnectedState(st.val) : null;
-        this.log.debug(`Auto init connected: stateId='${this.carConnectedStateId}' val='${st && st.val !== undefined ? st.val : undefined}' parsed=${parsed}`);
-        if (parsed !== null) {
-            this.carConnected = parsed;
-            await this.setStateAsync('car.connected', { val: parsed, ack: true });
-            await this.setStateAsync('car.lastUpdate', { val: new Date().toISOString(), ack: true });
-        }
-    }
-
-    async initCarCharging() {
-        if (!this.carChargingStateId) return;
-        const st = await this.getForeignStateAsync(this.carChargingStateId).catch(() => null);
-        const parsed = st && st.val !== undefined ? parseChargingState(st.val) : null;
-        this.log.debug(`Auto init charging: stateId='${this.carChargingStateId}' val='${st && st.val !== undefined ? st.val : undefined}' parsed=${parsed}`);
-        if (parsed !== null) {
-            this.carCharging = parsed;
-            await this.setStateAsync('car.charging', { val: parsed, ack: true });
-            await this.setStateAsync('car.lastUpdate', { val: new Date().toISOString(), ack: true });
-        }
-    }
-
-    async updateCarConnected(value, source) {
-        const parsed = parseConnectedState(value);
-        if (parsed === null) return;
-        this.carConnected = parsed;
-        await this.setStateAsync('car.connected', { val: parsed, ack: true });
-        await this.setStateAsync('car.lastUpdate', { val: new Date().toISOString(), ack: true });
-        if (source) this.log.debug(`Auto connected update from ${source}: ${parsed}`);
-        this.scheduleVisHtmlUpdate('carConnectedChange');
-    }
-
-    async updateCarCharging(value, source) {
-        const parsed = parseChargingState(value);
-        if (parsed === null) return;
-        this.carCharging = parsed;
-        await this.setStateAsync('car.charging', { val: parsed, ack: true });
-        await this.setStateAsync('car.lastUpdate', { val: new Date().toISOString(), ack: true });
-        if (source) this.log.debug(`Auto charging update from ${source}: ${parsed}`);
-        this.scheduleVisHtmlUpdate('carChargingChange');
-    }
-
-    shouldShowNearestType2Card() {
-        const connectedKnown = typeof this.carConnected === 'boolean';
-        const chargingKnown = typeof this.carCharging === 'boolean';
-        if (!connectedKnown && !chargingKnown) return true;
-        return !(this.carConnected === true || this.carCharging === true);
     }
 
     buildBBox(lat, lon, radiusM) {
@@ -967,63 +746,33 @@ class CptAdapter extends utils.Adapter {
             let distM = parseNumberLocale(nearest.__distanceM ?? nearest.distance ?? nearest.distance_m ?? nearest.distanceMeters ?? nearest.distance_meters);
             const stLat = parseNumberLocale(nearest.lat ?? nearest.latitude);
             const stLon = parseNumberLocale(nearest.lon ?? nearest.longitude);
-            let nearestDistanceType = this.getTomTomEnabled() ? 'fallback' : 'airline';
-            if (Number.isFinite(stLat) && Number.isFinite(stLon)) {
-                const distInfo = await this.getDistanceInfo(lat, lon, stLat, stLon);
-                nearestDistanceType = String(distInfo?.source || nearestDistanceType);
-                if (Number.isFinite(Number(distInfo?.m))) {
-                    distM = Number(distInfo.m);
-                } else if (!Number.isFinite(distM)) {
-                    distM = Math.round(this.haversineKm(lat, lon, stLat, stLon) * 1000);
-                }
+            if (!Number.isFinite(distM) && Number.isFinite(stLat) && Number.isFinite(stLon)) {
+                // compute haversine distance (meters)
+                const R = 6371000;
+                const toRad = (x) => (x * Math.PI) / 180;
+                const dLat = toRad(stLat - lat);
+                const dLon = toRad(stLon - lon);
+                const a = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(lat)) * Math.cos(toRad(stLat)) * Math.sin(dLon / 2) ** 2;
+                const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+                distM = R * c;
             }
             const latS = parseNumberLocale(nearest.lat ?? nearest.latitude);
             const lonS = parseNumberLocale(nearest.lon ?? nearest.longitude);
             const portsArr = Array.isArray(nearest.ports) ? nearest.ports : [];
-            let freePorts = Number.isFinite(parseNumberLocale(nearest.free_ports ?? nearest.freePorts))
+            const freePorts = Number.isFinite(parseNumberLocale(nearest.free_ports ?? nearest.freePorts))
                 ? parseNumberLocale(nearest.free_ports ?? nearest.freePorts)
                 : portsArr.filter(p => String(p?.status_v2 ?? p?.statusV2 ?? p?.status).toLowerCase() === 'available').length;
-            let portCount = Number.isFinite(parseNumberLocale(nearest.total_port_count ?? nearest.portCount))
+            const portCount = Number.isFinite(parseNumberLocale(nearest.total_port_count ?? nearest.portCount))
                 ? parseNumberLocale(nearest.total_port_count ?? nearest.portCount)
                 : (Number.isFinite(parseNumberLocale(nearest.total_port_count)) ? parseNumberLocale(nearest.total_port_count) : portsArr.length);
             const stationId = String(nearest.device_id ?? nearest.station_id ?? nearest.id ?? '').trim();
 
-            // Prefer internally refreshed station states when we can map the nearest API hit to a known station.
-            // This keeps the "Nächste freie Typ2" card consistent with the station list below.
-            const nearestPrefix = stationId ? this.stationPrefixByDeviceId[stationId] : null;
-            if (nearestPrefix) {
-                const [freeSt, countSt, nameSt, addrSt] = await Promise.all([
-                    this.getStateAsync(nearestPrefix + '.freePorts').catch(() => null),
-                    this.getStateAsync(nearestPrefix + '.portCount').catch(() => null),
-                    this.getStateAsync(nearestPrefix + '.name').catch(() => null),
-                    this.getStateAsync(nearestPrefix + '.address').catch(() => null),
-                ]);
-                if (freeSt?.val !== undefined && freeSt?.val !== null && freeSt?.val !== '') {
-                    const v = Number(freeSt.val);
-                    if (Number.isFinite(v)) freePorts = v;
-                }
-                if (countSt?.val !== undefined && countSt?.val !== null && countSt?.val !== '') {
-                    const v = Number(countSt.val);
-                    if (Number.isFinite(v)) portCount = v;
-                }
-                if ((!name || !String(name).trim()) && nameSt?.val) {
-                    nearest.station_name = String(nameSt.val);
-                }
-                if ((!addressFull || !String(addressFull).trim()) && addrSt?.val) {
-                    nearest.address = String(addrSt.val);
-                }
-            }
-
-            const resolvedName = nearest.station_name || nearest.name || nearest.name1 || name || '';
-            const resolvedAddress = (nearest.address || addressFull || '').toString().trim();
-            if (resolvedName) await this.setStateAsync('nearestType2.name', { val: resolvedName, ack: true });
-            await this.setStateAsync('nearestType2.address', { val: resolvedAddress || '', ack: true });
+            if (name) await this.setStateAsync('nearestType2.name', { val: name, ack: true });
+            await this.setStateAsync('nearestType2.address', { val: addressFull || '', ack: true });
             if (Number.isFinite(distM)) {
                 await this.setStateAsync('nearestType2.distance.m', { val: Math.round(distM), ack: true });
                 await this.setStateAsync('nearestType2.distance.km', { val: Math.round((distM / 1000) * 100) / 100, ack: true });
             }
-            await this.setStateAsync('nearestType2.distanceType', { val: nearestDistanceType, ack: true });
-            await this.updateDistanceSourceStates(nearestDistanceType);
             if (Number.isFinite(freePorts)) await this.setStateAsync('nearestType2.freePorts', { val: Math.round(freePorts), ack: true });
             if (Number.isFinite(portCount)) await this.setStateAsync('nearestType2.portCount', { val: Math.round(portCount), ack: true });
             if (Number.isFinite(latS)) await this.setStateAsync('nearestType2.lat', { val: latS, ack: true });
@@ -1236,7 +985,6 @@ class CptAdapter extends utils.Adapter {
             ['statusAgeMin', { name: 'Status seit (Minuten)', type: 'number', role: 'value.interval', unit: 'min', read: true, write: false }],
             ['portCount', { name: 'Anzahl Ports', type: 'number', role: 'value', read: true, write: false }],
             ['freePorts', { name: 'Freie Ports', type: 'number', role: 'value', read: true, write: false }],
-            ['distanceType', { name: 'Distanzquelle', type: 'string', role: 'text', read: true, write: false }],
             ['lastUpdate', { name: 'Letztes Update', type: 'string', role: 'date', read: true, write: false }],
         ];
 
@@ -1280,10 +1028,6 @@ class CptAdapter extends utils.Adapter {
         await this.setStateAsync(`${stationPrefix}.deviceId1`, { val: String(station.deviceId1 ?? ''), ack: true });
         await this.setStateAsync(`${stationPrefix}.deviceId2`, { val: station.deviceId2 ? String(station.deviceId2) : '', ack: true });
         await this.setStateAsync(`${stationPrefix}.enabled`, { val: !!station.enabled, ack: true });
-        const curDistanceType = await this.getStateAsync(`${stationPrefix}.distanceType`).catch(() => null);
-        if (!curDistanceType || curDistanceType.val === null || curDistanceType.val === undefined || curDistanceType.val === '') {
-            await this.setStateAsync(`${stationPrefix}.distanceType`, { val: this.getTomTomEnabled() ? 'tomtom' : 'airline', ack: true });
-        }
 
         // default valid=true; will be updated on poll based on real API data
         const curValid = await this.getStateAsync(`${stationPrefix}.valid`).catch(() => null);
@@ -1338,36 +1082,6 @@ class CptAdapter extends utils.Adapter {
             return [{ ...p1, outletNumber: 1 }, { ...p2, outletNumber: 2 }];
         }
         return Array.isArray(data1?.portsInfo?.ports) ? data1.portsInfo.ports : [];
-    }
-
-
-    async cleanupObsoletePortStates(stationPrefix, keepPortCount) {
-        try {
-            const pat = `${this.namespace}.${stationPrefix}.ports.*.statusV2`;
-            const states = await this.getStatesAsync(pat);
-            const stalePorts = new Set();
-            for (const key of Object.keys(states || {})) {
-                const m = key.match(/\.ports\.(\d+)\.statusV2$/);
-                if (!m) continue;
-                const n = Number(m[1]);
-                if (!Number.isFinite(n) || n <= keepPortCount) continue;
-                stalePorts.add(n);
-            }
-
-            for (const n of Array.from(stalePorts).sort((a, b) => a - b)) {
-                const portPrefix = `${stationPrefix}.ports.${n}`;
-                await this.updateStateIfChanged(`${portPrefix}.status`, '');
-                await this.updateStateIfChanged(`${portPrefix}.statusV2`, '');
-                await this.updateStateIfChanged(`${portPrefix}.evseId`, '');
-                await this.updateStateIfChanged(`${portPrefix}.displayPlugType`, '');
-                await this.updateStateIfChanged(`${portPrefix}.maxPowerKw`, null);
-                await this.setStateAsync(`${portPrefix}.lastUpdate`, { val: new Date().toISOString(), ack: true });
-                delete this.lastPortStatusByKey[`${stationPrefix}|${n}`];
-                this.log.debug(`Bereinige veralteten Portstatus: ${portPrefix}`);
-            }
-        } catch (e) {
-            this.log.debug(`cleanupObsoletePortStates fehlgeschlagen für ${stationPrefix}: ${e?.message || e}`);
-        }
     }
 
     async updateAllStations(stations) {
@@ -1474,8 +1188,6 @@ class CptAdapter extends utils.Adapter {
                 await this.setStateAsync(`${portPrefix}.lastUpdate`, { val: new Date().toISOString(), ack: true });
             }
 
-            await this.cleanupObsoletePortStates(stationPrefix, portCount);
-
             // notify logic: when any port transitions to "available"
             if (anyPortBecameAvailable) {
                 await this.attemptNotifyForStation({
@@ -1509,17 +1221,14 @@ class CptAdapter extends utils.Adapter {
                 // clear distance if previously set
                 await this.updateStateIfChanged(`${stationPrefixRel}.distance.km`, null);
                 await this.updateStateIfChanged(`${stationPrefixRel}.distance.m`, null);
-                await this.updateStateIfChanged(`${stationPrefixRel}.distanceType`, 'unknown');
                 return;
             }
-            const dist = await this.getDistanceInfo(latCar, lonCar, Number(gps.lat), Number(gps.lon));
-            const km = Number(dist?.km);
-            const m = Number(dist?.m);
-            if (!Number.isFinite(km) || !Number.isFinite(m)) return;
+            const km = this.haversineKm(latCar, lonCar, Number(gps.lat), Number(gps.lon));
+            if (!Number.isFinite(km)) return;
+            const m = Math.round(km * 1000);
             const kmRound = Math.round(km * 100) / 100;
             await this.updateStateIfChanged(`${stationPrefixRel}.distance.km`, kmRound);
-            await this.updateStateIfChanged(`${stationPrefixRel}.distance.m`, Math.round(m));
-            await this.updateDistanceSourceStates(String(dist?.source || 'airline'), stationPrefixRel);
+            await this.updateStateIfChanged(`${stationPrefixRel}.distance.m`, m);
         } catch (e) {
             this.log.debug(`Distanzberechnung fehlgeschlagen (${stationPrefixRel}): ${e.message}`);
         }
@@ -1726,9 +1435,8 @@ async cleanupObsoleteStations(currentPrefixes) {
         const stationsRoot = this.namespace + '.stations.';
         const stationStates = await this.getStatesAsync(stationsRoot + '*');
         const nearestStates = await this.getStatesAsync(this.namespace + '.nearestType2.*');
-        const toolStates = await this.getStatesAsync(this.namespace + '.tools.*');
 
-        const all = { ...(stationStates || {}), ...(nearestStates || {}), ...(toolStates || {}) };
+        const all = { ...(stationStates || {}), ...(nearestStates || {}) };
 
         const prefixesAll = Object.keys(stationStates || {})
             .filter((k) => k.endsWith('.name') && stationStates[k] && stationStates[k].val !== undefined)
@@ -1771,8 +1479,7 @@ async cleanupObsoleteStations(currentPrefixes) {
                 neutral: 'background:rgba(255,255,255,.10); border:1px solid rgba(255,255,255,.18);',
             };
             const st = styles[kind] || styles.neutral;
-            const content = (typeof text === 'string' && text.includes('<')) ? text : esc(text);
-            return `<span style="display:inline-flex;align-items:center;gap:6px;padding:6px 10px;border-radius:999px;font-size:13px;font-weight:700;white-space:nowrap;${st}">${content}</span>`;
+            return `<span style="display:inline-flex;align-items:center;gap:6px;padding:6px 10px;border-radius:999px;font-size:13px;font-weight:700;white-space:nowrap;${st}">${esc(text)}</span>`;
         };
 
         const portDot = (kind) => {
@@ -1791,38 +1498,32 @@ async cleanupObsoleteStations(currentPrefixes) {
             return st ? st.val : undefined;
         };
 
-        const tomtomDistanceHtml = (text) => `<span style="display:inline-flex;align-items:center;gap:4px;"><img src="${TOMTOM_LOGO_PATH}" style="height:16px;width:auto;vertical-align:-3px;">${esc(text)}</span>`;
-        const lastRefreshText = () => {
-            const ts = getVal('tools.lastRefresh');
-            if (!ts) return '—';
-            const d = new Date(ts);
-            if (!Number.isFinite(d.getTime())) return '—';
-            return d.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
-        };
-
-        const updated = lastRefreshText();
+        const lastRefreshRaw = getVal('tools.lastRefresh');
+        const lastRefresh = lastRefreshRaw ? new Date(lastRefreshRaw).toLocaleString('de-DE') : '—';
+        const headerTitle = `⚡ CPT ${VERSION}`;
+        const refreshButton = `<button id="cptRefreshBtnMobile" onclick="this.style.background='#777';this.innerHTML='⏳ Refresh...';(function(v){if(v&&v.conn&&v.conn.setState){v.conn.setState('cpt.0.tools.refreshNow', true);}else if(window.parent&&window.parent.vis&&window.parent.vis.conn&&window.parent.vis.conn.setState){window.parent.vis.conn.setState('cpt.0.tools.refreshNow', true);}})(typeof vis!=='undefined'?vis:null);" style="background:#2b8cff;border:none;color:white;padding:6px 12px;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;">🔄 Refresh</button>`;
+        const refreshScript = `<script>(function(){let last=null;setInterval(function(){try{const v=(typeof vis!=='undefined'&&vis&&vis.states&&vis.states.attr)?vis.states.attr('cpt.0.tools.lastRefresh.val'):(window.parent&&window.parent.vis&&window.parent.vis.states&&window.parent.vis.states.attr?window.parent.vis.states.attr('cpt.0.tools.lastRefresh.val'):null);if(v&&v!==last){last=v;const b=document.getElementById('cptRefreshBtnMobile');if(b){b.style.background='#2b8cff';b.innerHTML='🔄 Refresh';}const t=document.getElementById('cptLastRefreshMobile');if(t){try{t.textContent=new Date(v).toLocaleString('de-DE');}catch(_){t.textContent=v;}}}}catch(e){}},1500);})();</script>`;
         let out = `
 <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;font-size:16px;">
-  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;gap:10px;">
-    <div style="display:flex;align-items:baseline;gap:8px;"><span style="font-weight:900;font-size:18px;">⚡ CPT</span><span style="font-weight:700;font-size:12px;opacity:.8;">${esc(VERSION)}</span></div>
-    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:flex-end;">
-      <button onclick="(function(btn){ if (btn.dataset.busy === '1') return; btn.dataset.busy = '1'; btn.disabled = true; btn.style.background = '#777'; btn.style.cursor = 'default'; btn.innerHTML = '⏳ Refresh...'; vis.conn.setState('cpt.0.tools.refreshNow', true); var started = Date.now(); var reset = function(){ btn.dataset.busy = '0'; btn.disabled = false; btn.style.background = '#2b8cff'; btn.style.cursor = 'pointer'; btn.innerHTML = '🔄 Refresh'; }; var timer = setInterval(function(){ try { var v = (vis.states && typeof vis.states.attr === 'function') ? vis.states.attr('cpt.0.tools.refreshNow.val') : null; if (v === false || v === 'false' || v === 0 || v === '0') { clearInterval(timer); reset(); return; } } catch (e) {} if (Date.now() - started > 15000) { clearInterval(timer); reset(); } }, 500); })(this);" style="background:#2b8cff;border:none;color:white;padding:6px 12px;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;">🔄 Refresh</button>
-      <div style="opacity:.7;font-size:12px;">${esc(updated)}</div>
+  <div style="display:flex;align-items:flex-end;justify-content:space-between;margin-bottom:10px;gap:10px;">
+    <div>
+      <div style="font-weight:900;font-size:18px;">${esc(headerTitle)}</div>
+      <div style="opacity:.72;font-size:11px;margin-top:2px;">Letzter Refresh: <span id="cptLastRefreshMobile">${esc(lastRefresh)}</span></div>
     </div>
+    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:flex-end;">${refreshButton}</div>
   </div>
+  ${refreshScript}
 
-  ${this.shouldShowNearestType2Card() ? (() => {
+  ${(() => {
       const nName  = getVal('nearestType2.name') ?? '';
       const nAddr  = getVal('nearestType2.address') ?? '';
       const nDistM = getVal('nearestType2.distance.m');
       const nFree  = getVal('nearestType2.freePorts');
       const nPorts = getVal('nearestType2.portCount');
       const nErr   = getVal('nearestType2.lastError') ?? '';
-      const nDistType = getVal('nearestType2.distanceType') ?? '';
 
       const has = !!String(nName).trim();
-      const distTxtRaw = (nDistM !== undefined && nDistM !== null && nDistM !== '') ? `${Math.round(Number(nDistM))} m` : '—';
-      const distTxt = (nDistType === 'tomtom' && distTxtRaw !== '—') ? tomtomDistanceHtml(distTxtRaw) : esc(distTxtRaw);
+      const distTxt = (nDistM !== undefined && nDistM !== null && nDistM !== '') ? `${Math.round(Number(nDistM))} m` : '—';
       const portsTxt = (nFree !== undefined && nPorts !== undefined && nFree !== null && nPorts !== null && nFree !== '' && nPorts !== '') ? `${nFree}/${nPorts} frei` : '—';
 
       const statusKind = has ? ((Number(nFree) > 0) ? 'ok' : 'warn') : 'bad';
@@ -1846,7 +1547,7 @@ async cleanupObsoleteStations(currentPrefixes) {
       <div style="flex:0 0 auto;">${badge(statusText, statusKind)}</div>
     </div>
   </div>`;
-  })() : ''}
+  })()}
 
   <div style="display:flex;flex-direction:column;gap:10px;">
 `;
@@ -1889,14 +1590,6 @@ async cleanupObsoleteStations(currentPrefixes) {
             const ageText = (ageMin !== undefined && ageMin !== null && ageMin !== '')
                 ? `seit ${esc(ageMin)} min`
                 : '';
-            const distM = getVal(p + '.distance.m');
-            const distanceType = getVal(p + '.distanceType');
-            let distanceText = '';
-            if (distM !== undefined && distM !== null && distM !== '' && !Number.isNaN(Number(distM))) {
-                const dNum = Number(distM);
-                const dLabel = dNum >= 1000 ? `${(dNum / 1000).toFixed(2)} km` : `${Math.round(dNum)} m`;
-                distanceText = distanceType === 'tomtom' ? tomtomDistanceHtml(dLabel) : esc(dLabel);
-            }
 
             // Ports (Variante 1 + 2)
             let dotsHtml = '';
@@ -1936,8 +1629,8 @@ async cleanupObsoleteStations(currentPrefixes) {
           ${portsText ? `<div style="opacity:.9;font-size:12px;font-weight:800;">${portsText}</div>` : ''}
           ${dotsHtml ? `<div style="margin-top:6px;line-height:1;">${dotsHtml}</div>` : ''}
           ${portsDetailText ? `<div style="opacity:.8;font-size:11px;margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(portsDetailText)}</div>` : ''}
-          ${distanceText ? `<div style="opacity:.9;font-size:12px;font-weight:800;margin-top:6px;">${distanceText}</div>` : ''}
           ${ageText ? `<div style="opacity:.65;font-size:11px;margin-top:6px;">${ageText}</div>` : ''}
+          <div style="opacity:.58;font-size:10px;margin-top:4px;">Refresh: ${esc(lastRefresh)}</div>
         </div>
       </div>
     </div>
@@ -1959,9 +1652,8 @@ async cleanupObsoleteStations(currentPrefixes) {
         const stationsRoot = this.namespace + '.stations.';
         const stationStates = await this.getStatesAsync(stationsRoot + '*');
         const nearestStates = await this.getStatesAsync(this.namespace + '.nearestType2.*');
-        const toolStates = await this.getStatesAsync(this.namespace + '.tools.*');
 
-        const all = { ...(stationStates || {}), ...(nearestStates || {}), ...(toolStates || {}) };
+        const all = { ...(stationStates || {}), ...(nearestStates || {}) };
 
         const prefixesAll = Object.keys(stationStates || {})
             .filter((k) => k.endsWith('.name') && stationStates[k] && stationStates[k].val !== undefined)
@@ -2003,8 +1695,7 @@ async cleanupObsoleteStations(currentPrefixes) {
                 neutral: 'background:rgba(255,255,255,.10); border:1px solid rgba(255,255,255,.18);',
             };
             const st = styles[kind] || styles.neutral;
-            const content = (typeof text === 'string' && text.includes('<')) ? text : esc(text);
-            return `<span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;white-space:nowrap;${st}">${content}</span>`;
+            return `<span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:11px;white-space:nowrap;${st}">${esc(text)}</span>`;
         };
 
         const kindFromStatus = (s) => {
@@ -2033,18 +1724,6 @@ async cleanupObsoleteStations(currentPrefixes) {
             return st ? st.val : undefined;
         };
 
-        const tomtomDistanceHtml = (text) => `<span style="display:inline-flex;align-items:center;gap:4px;"><img src="${TOMTOM_LOGO_PATH}" style="height:16px;width:auto;vertical-align:-3px;">${esc(text)}</span>`;
-        const lastRefreshText = () => {
-            const ts = getVal('tools.lastRefresh');
-            if (!ts) return '—';
-            const d = new Date(ts);
-            if (!Number.isFinite(d.getTime())) return '—';
-            return d.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
-        };
-
-        // Human readable "age" from a timestamp (ms).
-        // - show minutes for <= 100 minutes
-        // - show hours for > 100 minutes
         const ageText = (tsMs) => {
             if (!tsMs || Number.isNaN(Number(tsMs))) return '—';
             const diffMin = Math.max(0, Math.floor((Date.now() - Number(tsMs)) / 60000));
@@ -2056,29 +1735,32 @@ async cleanupObsoleteStations(currentPrefixes) {
             return `${diffMin} min`;
         };
 
-        const updated = lastRefreshText();
+        const lastRefreshRaw = getVal('tools.lastRefresh');
+        const lastRefresh = lastRefreshRaw ? new Date(lastRefreshRaw).toLocaleString('de-DE') : '—';
+        const headerTitle = `⚡ CPT ${VERSION}`;
+        const refreshButton = `<button id="cptRefreshBtnDesktop" onclick="this.style.background='#777';this.innerHTML='⏳ Refresh...';(function(v){if(v&&v.conn&&v.conn.setState){v.conn.setState('cpt.0.tools.refreshNow', true);}else if(window.parent&&window.parent.vis&&window.parent.vis.conn&&window.parent.vis.conn.setState){window.parent.vis.conn.setState('cpt.0.tools.refreshNow', true);}})(typeof vis!=='undefined'?vis:null);" style="background:#2b8cff;border:none;color:white;padding:5px 10px;border-radius:8px;font-size:11px;font-weight:700;cursor:pointer;">🔄 Refresh</button>`;
+        const refreshScript = `<script>(function(){let last=null;setInterval(function(){try{const v=(typeof vis!=='undefined'&&vis&&vis.states&&vis.states.attr)?vis.states.attr('cpt.0.tools.lastRefresh.val'):(window.parent&&window.parent.vis&&window.parent.vis.states&&window.parent.vis.states.attr?window.parent.vis.states.attr('cpt.0.tools.lastRefresh.val'):null);if(v&&v!==last){last=v;const b=document.getElementById('cptRefreshBtnDesktop');if(b){b.style.background='#2b8cff';b.innerHTML='🔄 Refresh';}const t=document.getElementById('cptLastRefreshDesktop');if(t){try{t.textContent=new Date(v).toLocaleString('de-DE');}catch(_){t.textContent=v;}}}}catch(e){}},1500);})();</script>`;
         let out = `
-<div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;font-size:14px;">
-  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;gap:10px;">
-    <div style="display:flex;align-items:baseline;gap:8px;"><span style="font-weight:800;font-size:16px;">⚡ CPT</span><span style="font-weight:700;font-size:11px;opacity:.8;">${esc(VERSION)}</span></div>
-    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:flex-end;">
-      <button onclick="(function(btn){ if (btn.dataset.busy === '1') return; btn.dataset.busy = '1'; btn.disabled = true; btn.style.background = '#777'; btn.style.cursor = 'default'; btn.innerHTML = '⏳ Refresh...'; vis.conn.setState('cpt.0.tools.refreshNow', true); var started = Date.now(); var reset = function(){ btn.dataset.busy = '0'; btn.disabled = false; btn.style.background = '#2b8cff'; btn.style.cursor = 'pointer'; btn.innerHTML = '🔄 Refresh'; }; var timer = setInterval(function(){ try { var v = (vis.states && typeof vis.states.attr === 'function') ? vis.states.attr('cpt.0.tools.refreshNow.val') : null; if (v === false || v === 'false' || v === 0 || v === '0') { clearInterval(timer); reset(); return; } } catch (e) {} if (Date.now() - started > 15000) { clearInterval(timer); reset(); } }, 500); })(this);" style="background:#2b8cff;border:none;color:white;padding:6px 12px;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;">🔄 Refresh</button>
-      <div style="opacity:.75;font-size:12px;">${esc(updated)}</div>
+<div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;font-size:13px;">
+  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;gap:10px;">
+    <div>
+      <div style="font-weight:800;font-size:15px;">${esc(headerTitle)}</div>
+      <div style="opacity:.75;font-size:11px;">Letzter Refresh: <span id="cptLastRefreshDesktop">${esc(lastRefresh)}</span></div>
     </div>
+    <div>${refreshButton}</div>
   </div>
+  ${refreshScript}
 
-  ${this.shouldShowNearestType2Card() ? (() => {
+  ${(() => {
       const nName  = getVal('nearestType2.name') ?? '';
       const nAddr  = getVal('nearestType2.address') ?? '';
       const nDistM = getVal('nearestType2.distance.m');
       const nFree  = getVal('nearestType2.freePorts');
       const nPorts = getVal('nearestType2.portCount');
       const nErr   = getVal('nearestType2.lastError') ?? '';
-      const nDistType = getVal('nearestType2.distanceType') ?? '';
 
       const has = !!String(nName).trim();
-      const distTxtRaw = (nDistM !== undefined && nDistM !== null && nDistM !== '') ? `${Math.round(Number(nDistM))} m` : '—';
-      const distTxt = (nDistType === 'tomtom' && distTxtRaw !== '—') ? tomtomDistanceHtml(distTxtRaw) : esc(distTxtRaw);
+      const distTxt = (nDistM !== undefined && nDistM !== null && nDistM !== '') ? `${Math.round(Number(nDistM))} m` : '—';
       const portsTxt = (nFree !== undefined && nPorts !== undefined && nFree !== null && nPorts !== null && nFree !== '' && nPorts !== '') ? `${nFree}/${nPorts} frei` : '—';
 
       const statusKind = has ? ((Number(nFree) > 0) ? 'ok' : 'warn') : 'bad';
@@ -2088,13 +1770,13 @@ async cleanupObsoleteStations(currentPrefixes) {
       const addr = has ? esc(nAddr) : esc(nErr || 'Keine Station im Umkreis gefunden');
 
       return `
-  <div style="border:1px solid rgba(255,255,255,.12);border-radius:14px;padding:12px;margin-bottom:10px;background:rgba(0,0,0,.18);box-shadow:0 10px 24px rgba(0,0,0,.18);">
+  <div style="border:1px solid rgba(255,255,255,.12);border-radius:12px;padding:9px 10px;margin-bottom:8px;background:rgba(0,0,0,.18);box-shadow:0 8px 18px rgba(0,0,0,.16);">
     <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:10px;">
       <div style="min-width:0;">
         <div style="font-weight:900;font-size:13px;letter-spacing:.02em;opacity:.9;">🧭 Nächste freie Typ2</div>
-        <div style="margin-top:6px;font-size:14px;font-weight:900;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${title}</div>
-        <div style="opacity:.8;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${addr}</div>
-        <div style="margin-top:6px;display:flex;gap:8px;flex-wrap:wrap;">
+        <div style="margin-top:4px;font-size:13px;font-weight:900;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${title}</div>
+        <div style="opacity:.8;font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${addr}</div>
+        <div style="margin-top:5px;display:flex;gap:6px;flex-wrap:wrap;">
           ${badge(distTxt, 'neutral')}
           ${badge(portsTxt, statusKind)}
         </div>
@@ -2102,17 +1784,16 @@ async cleanupObsoleteStations(currentPrefixes) {
       <div style="flex:0 0 auto;">${badge(statusText, statusKind)}</div>
     </div>
   </div>`;
-  })() : ''}
-  </div>
-  <div style="border:1px solid rgba(255,255,255,.12);border-radius:14px;overflow:hidden;background:rgba(0,0,0,.18);box-shadow:0 10px 24px rgba(0,0,0,.28);">
+  })()}
+
+  <div style="display:flex;flex-direction:column;gap:6px;">
 `;
 
         if (!prefixes.length) {
-            out += `<div style="padding:12px;">Keine Stationsdaten gefunden.</div></div></div>`;
+            out += `<div style="padding:10px;border:1px solid rgba(255,255,255,.12);border-radius:10px;background:rgba(0,0,0,.18);">Keine Stationsdaten gefunden.</div>`;
+            out += `</div></div>`;
             return out;
         }
-
-        out += `<div style="padding:10px;display:grid;gap:10px;">`;
 
         for (const p of prefixes) {
             const city = getVal(p + '.city') ?? '';
@@ -2122,94 +1803,68 @@ async cleanupObsoleteStations(currentPrefixes) {
             const st = getVal(p + '.statusDerived') ?? '';
 
             const portsSummary = (fp !== undefined && pc !== undefined)
-                ? badge(`${fp}/${pc} frei`, (Number(fp) > 0 ? 'ok' : 'warn'))
-                : badge('—', 'neutral');
+                ? `${fp}/${pc} frei`
+                : '—';
 
-            const portBadges = [];
+            const portParts = [];
+            const prefixFull = this.namespace + '.' + p + '.ports.';
             let newestPortTs = 0;
-            const portCountNum = Number(pc);
-            if (Number.isFinite(portCountNum) && portCountNum > 0) {
-                for (let n = 1; n <= portCountNum; n++) {
-                    const s2 = getVal(p + `.ports.${n}.statusV2`);
-                    const s1 = getVal(p + `.ports.${n}.status`);
-                    const s = (s2 ?? s1);
-                    if (s === undefined || s === null || s === '') continue;
-                    portBadges.push({ n, html: badge(`P${n}: ${s}`, kindFromPort(s)) });
-
-                    const stObj = allStates[this.namespace + '.' + p + `.ports.${n}.statusV2`];
-                    const ts = stObj ? (stObj.lc || stObj.ts) : 0;
-                    if (ts && ts > newestPortTs) newestPortTs = ts;
-                }
-            } else {
-                const prefixFull = this.namespace + '.' + p + '.ports.';
-                for (const key of Object.keys(allStates)) {
-                    if (!key.startsWith(prefixFull) || !key.endsWith('.statusV2')) continue;
-                    const m = key.match(/\.ports\.(\d+)\.statusV2$/);
-                    if (!m) continue;
-                    const n = Number(m[1]);
-                    const s2 = getVal(p + `.ports.${n}.statusV2`);
-                    const s1 = getVal(p + `.ports.${n}.status`);
-                    const s = (s2 ?? s1);
-                    if (s === undefined || s === null || s === '') continue;
-                    portBadges.push({ n, html: badge(`P${n}: ${s}`, kindFromPort(s)) });
-
-                    const stObj = allStates[key];
-                    const ts = stObj ? (stObj.lc || stObj.ts) : 0;
-                    if (ts && ts > newestPortTs) newestPortTs = ts;
-                }
-                portBadges.sort((a, b) => a.n - b.n);
+            for (const key of Object.keys(allStates)) {
+                if (!key.startsWith(prefixFull) || !key.endsWith('.statusV2')) continue;
+                const m = key.match(/\.ports\.(\d+)\.statusV2$/);
+                if (!m) continue;
+                const n = m[1];
+                const s2 = getVal(p + `.ports.${n}.statusV2`);
+                const s1 = getVal(p + `.ports.${n}.status`);
+                const portStatus = (s2 ?? s1);
+                if (portStatus === undefined) continue;
+                portParts.push(badge(`P${n}: ${portStatus}`, kindFromPort(portStatus)));
+                const stObj = allStates[key];
+                const ts = stObj ? (stObj.lc || stObj.ts) : 0;
+                if (ts && ts > newestPortTs) newestPortTs = ts;
             }
-            portBadges.sort((a, b) => a.n - b.n);
-            const portText = portBadges.length ? portBadges.map(x => x.html).join(' ') : `<span style="opacity:.75;">—</span>`;
 
             const gpsLat = getVal(p + '.gps.lat');
             const gpsLon = getVal(p + '.gps.lon');
             const gpsOk = (gpsLat !== undefined && gpsLon !== undefined);
             const mapsUrl = gpsOk ? `https://www.google.com/maps?q=${gpsLat},${gpsLon}` : '';
             const gpsText = gpsOk
-                ? `<a href="${mapsUrl}" target="_blank" style="color:inherit; text-decoration:underline; opacity:.95;">${esc(gpsLat)}, ${esc(gpsLon)}</a>`
+                ? `<a href="${mapsUrl}" target="_blank" style="color:inherit;text-decoration:underline;opacity:.9;">${esc(gpsLat)}, ${esc(gpsLon)}</a>`
                 : `<span style="opacity:.75;">—</span>`;
 
-            const dM = getVal(p + '.distance.m');
             const dKm = getVal(p + '.distance.km');
-            const distanceType = getVal(p + '.distanceType');
-            let dLabel = '';
-            if (dM !== undefined && dM !== null && dM !== '' && Number.isFinite(Number(dM))) {
-                const mVal = Number(dM);
-                dLabel = mVal < 1000 ? `${Math.round(mVal)} m` : `${(mVal / 1000).toFixed(2)} km`;
-            } else if (dKm !== undefined && dKm !== null && dKm !== '' && Number.isFinite(Number(dKm))) {
-                dLabel = `${Number(dKm).toFixed(2)} km`;
-            }
-            const distText = dLabel
-                ? badge((distanceType === 'tomtom' ? tomtomDistanceHtml(dLabel) : dLabel), 'neutral')
-                : badge('—', 'neutral');
+            const distText = (dKm !== undefined && dKm !== null && dKm !== '') ? `${dKm} km` : '—';
 
-            // Age: prefer latest port status timestamp; fallback to derived status timestamp
             let ageTs = newestPortTs;
             if (!ageTs) {
                 const stObj = getState(p + '.statusDerived');
                 ageTs = stObj ? (stObj.lc || stObj.ts) : 0;
             }
-            const ageBadge = badge(`vor ${ageText(ageTs)}`, 'neutral');
+            const ageLabel = `vor ${ageText(ageTs)}`;
 
             out += `
-      <div style="border:1px solid rgba(255,255,255,.08);border-radius:12px;padding:12px;background:rgba(255,255,255,.03);">
-        <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:10px;">
-          <div style="min-width:0;">
-            <div style="font-size:12px;opacity:.75;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(city)}</div>
-            <div style="margin-top:2px;font-size:15px;font-weight:800;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(name)}</div>
-          </div>
-          <div style="flex:0 0 auto;">${badge(st || '—', kindFromStatus(st))}</div>
+    <div style="border:1px solid rgba(255,255,255,.10);border-radius:10px;padding:7px 10px;background:rgba(255,255,255,.03);">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;line-height:1.2;">
+        <div style="min-width:0;display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+          <span style="font-weight:800;white-space:nowrap;">${esc(city)}</span>
+          <span style="opacity:.75;">•</span>
+          <span style="font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:360px;display:inline-block;vertical-align:bottom;">${esc(name)}</span>
         </div>
-        <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap;">${portsSummary}${distText}${ageBadge}</div>
-        <div style="margin-top:8px;line-height:1.8;">${portText}</div>
-        <div style="margin-top:8px;font-size:12px;opacity:.9;word-break:break-word;">${gpsText}</div>
+        <div style="flex:0 0 auto;">${badge(st || '—', kindFromStatus(st))}</div>
       </div>
-`;
+      <div style="margin-top:4px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;line-height:1.2;">
+        ${badge(portsSummary, (Number(fp) > 0 ? 'ok' : 'warn'))}
+        ${badge(distText, 'neutral')}
+        ${badge(ageLabel, 'neutral')}
+      </div>
+      <div style="margin-top:4px;display:flex;align-items:center;justify-content:space-between;gap:10px;line-height:1.2;">
+        <div style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${portParts.length ? portParts.join(' ') : `<span style="opacity:.75;">—</span>`}</div>
+        <div style="flex:0 0 auto;font-size:11px;opacity:.85;">${gpsText}</div>
+      </div>
+    </div>`;
         }
 
         out += `
-    </div>
   </div>
 </div>`;
         return out;
@@ -2222,23 +1877,15 @@ async onReady() {
         this.carLatStateId = (this.config && this.config.carLatStateId) ? String(this.config.carLatStateId).trim() : '';
         this.carLonStateId = (this.config && this.config.carLonStateId) ? String(this.config.carLonStateId).trim() : '';
         this.carSocStateId = (this.config && this.config.carSocStateId) ? String(this.config.carSocStateId).trim() : '';
-        this.carConnectedStateId = (this.config && this.config.carConnectedStateId) ? String(this.config.carConnectedStateId).trim() : '';
-        this.carChargingStateId = (this.config && this.config.carChargingStateId) ? String(this.config.carChargingStateId).trim() : '';
-        this.carConnected = null;
-        this.carCharging = null;
 
         this.carLatStatic = (this.config && this.config.carLat !== undefined && this.config.carLat !== null && this.config.carLat !== '') ? Number(this.config.carLat) : null;
         this.carLonStatic = (this.config && this.config.carLon !== undefined && this.config.carLon !== null && this.config.carLon !== '') ? Number(this.config.carLon) : null;
-        this.tomtomApiKey = (this.config && this.config.tomtomApiKey) ? String(this.config.tomtomApiKey).trim() : '';
-        this.tomtomTraffic = (this.config && this.config.tomtomTraffic !== undefined) ? isTrue(this.config.tomtomTraffic) : true;
-        this.tomtomCacheMin = (this.config && this.config.tomtomCacheMin !== undefined && this.config.tomtomCacheMin !== null && this.config.tomtomCacheMin !== '') ? Number(this.config.tomtomCacheMin) : 10;
 
         this.notifySocBelow = (this.config && this.config.notifySocBelow !== undefined && this.config.notifySocBelow !== null && this.config.notifySocBelow !== '') ? Number(this.config.notifySocBelow) : 30;
         this.notifyMaxDistanceM = (this.config && this.config.notifyMaxDistanceM !== undefined && this.config.notifyMaxDistanceM !== null && this.config.notifyMaxDistanceM !== '') ? Number(this.config.notifyMaxDistanceM) : 500;
         this.notifyCooldownMin = (this.config && this.config.notifyCooldownMin !== undefined && this.config.notifyCooldownMin !== null && this.config.notifyCooldownMin !== '') ? Number(this.config.notifyCooldownMin) : 15;
 
-        this.log.debug(`Config (car): latId='${this.carLatStateId}' lonId='${this.carLonStateId}' socId='${this.carSocStateId}' connectedId='${this.carConnectedStateId}' chargingId='${this.carChargingStateId}' latStatic=${this.carLatStatic} lonStatic=${this.carLonStatic} socBelow=${this.notifySocBelow} maxDistM=${this.notifyMaxDistanceM} cooldownMin=${this.notifyCooldownMin}`);
-        this.log.debug(`Config (tomtom): enabled=${this.getTomTomEnabled()} traffic=${this.tomtomTraffic} cacheMin=${this.tomtomCacheMin}`);
+        this.log.debug(`Config (car): latId='${this.carLatStateId}' lonId='${this.carLonStateId}' socId='${this.carSocStateId}' latStatic=${this.carLatStatic} lonStatic=${this.carLonStatic} socBelow=${this.notifySocBelow} maxDistM=${this.notifyMaxDistanceM} cooldownMin=${this.notifyCooldownMin}`);
 
         await this.ensureToolsObjects();
         await this.ensureCarObjects();
@@ -2248,14 +1895,10 @@ async onReady() {
         if (this.carLatStateId) this.subscribeForeignStates(this.carLatStateId);
         if (this.carLonStateId) this.subscribeForeignStates(this.carLonStateId);
         if (this.carSocStateId) this.subscribeForeignStates(this.carSocStateId);
-        if (this.carConnectedStateId) this.subscribeForeignStates(this.carConnectedStateId);
-        if (this.carChargingStateId) this.subscribeForeignStates(this.carChargingStateId);
 
         // initialize car position (static or from foreign)
         await this.initCarPosition();
         await this.initCarSoc();
-        await this.initCarConnected();
-        await this.initCarCharging();
         // initial distance calc + nearest station (if car GPS is known)
         this.scheduleCarDistanceUpdate('initial');
         this.scheduleNearestType2Update('initial');
@@ -2319,8 +1962,6 @@ async onReady() {
         }
 
         await this.updateAllStations(enabledStations);
-        await this.setStateAsync('tools.lastRefresh', { val: new Date().toISOString(), ack: true });
-        await this.setStateAsync('tools.lastRefreshResult', { val: 'startup_ok', ack: true });
 
         // initial VIS HTML write
         this.scheduleVisHtmlUpdate('initial');
@@ -2353,17 +1994,27 @@ async onReady() {
             return;
         }
 
-        if (id === this.carConnectedStateId) {
-            await this.updateCarConnected(state.val, this.carConnectedStateId);
-            return;
-        }
-
-        if (id === this.carChargingStateId) {
-            await this.updateCarCharging(state.val, this.carChargingStateId);
-            return;
-        }
-
         if (state.ack) return;
+
+        if (id === `${this.namespace}.tools.refreshNow` && state.val === true) {
+            try {
+                const stations = Array.isArray(this.enabledStations) ? this.enabledStations : [];
+                if (!stations.length) {
+                    await this.setStateAsync('tools.lastRefreshResult', { val: 'Keine aktiven Stationen', ack: true });
+                } else {
+                    await this.updateAllStations(stations);
+                    this.scheduleVisHtmlUpdate('manual refresh');
+                    this.scheduleNearestType2Update('manual refresh');
+                    await this.setStateAsync('tools.lastRefresh', { val: new Date().toISOString(), ack: true });
+                    await this.setStateAsync('tools.lastRefreshResult', { val: 'ok', ack: true });
+                }
+            } catch (e) {
+                await this.setStateAsync('tools.lastRefreshResult', { val: String(e?.message || e), ack: true });
+            } finally {
+                await this.setStateAsync('tools.refreshNow', { val: false, ack: true });
+            }
+            return;
+        }
 
         if (id === `${this.namespace}.tools.export` && state.val === true) {
             await this.doExportStations();
@@ -2396,53 +2047,6 @@ async onReady() {
                 this.log.warn(`TEST Notify ALL fehlgeschlagen: ${e.message}`);
             } finally {
                 await this.setStateAsync('tools.testNotifyAll', { val: false, ack: true });
-            }
-            return;
-        }
-
-
-        if (id === `${this.namespace}.tools.refreshNow` && state.val === true) {
-            const now = new Date().toISOString();
-            const nowTs = Date.now();
-
-            if (this.refreshRunning) {
-                await this.setStateAsync('tools.lastRefresh', { val: now, ack: true });
-                await this.setStateAsync('tools.lastRefreshResult', { val: 'busy', ack: true });
-                await this.setStateAsync('tools.refreshNow', { val: false, ack: true });
-                return;
-            }
-
-            if (this.lastManualRefreshTs && (nowTs - this.lastManualRefreshTs) < this.refreshMinGapMs) {
-                const waitMs = this.refreshMinGapMs - (nowTs - this.lastManualRefreshTs);
-                await this.setStateAsync('tools.lastRefresh', { val: now, ack: true });
-                await this.setStateAsync('tools.lastRefreshResult', { val: `debounced: wait ${Math.ceil(waitMs / 1000)}s`, ack: true });
-                await this.setStateAsync('tools.refreshNow', { val: false, ack: true });
-                this.log.debug(`Manueller Refresh geblockt (Debounce ${waitMs} ms Restlaufzeit)`);
-                return;
-            }
-
-            this.refreshRunning = true;
-            this.lastManualRefreshTs = nowTs;
-            await this.setStateAsync('tools.refreshRunning', { val: true, ack: true });
-            try {
-                const stations = Array.isArray(this.enabledStations) ? this.enabledStations : [];
-                if (!stations.length) throw new Error('Keine aktiven Stationen konfiguriert');
-
-                await this.updateAllStations(stations);
-                this.scheduleVisHtmlUpdate('manual_refresh');
-                this.scheduleNearestType2Update('manual_refresh');
-                await this.setStateAsync('tools.lastRefresh', { val: now, ack: true });
-                await this.setStateAsync('tools.lastRefreshResult', { val: 'ok', ack: true });
-                this.log.info('Manueller Refresh erfolgreich ausgeführt');
-            } catch (e) {
-                const msg = e?.message || String(e);
-                await this.setStateAsync('tools.lastRefresh', { val: now, ack: true });
-                await this.setStateAsync('tools.lastRefreshResult', { val: `error: ${msg}`, ack: true });
-                this.log.warn(`Manueller Refresh fehlgeschlagen: ${msg}`);
-            } finally {
-                this.refreshRunning = false;
-                await this.setStateAsync('tools.refreshRunning', { val: false, ack: true });
-                await this.setStateAsync('tools.refreshNow', { val: false, ack: true });
             }
             return;
         }
