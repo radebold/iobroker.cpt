@@ -2,6 +2,8 @@
 
 const utils = require('@iobroker/adapter-core');
 const axios = require('axios');
+const IO_PKG = require('./io-package.json');
+const VERSION = (IO_PKG && IO_PKG.common && IO_PKG.common.version) ? IO_PKG.common.version : '0.0.0';
 
 
 function parseNumberLocale(v) {
@@ -1480,9 +1482,12 @@ async cleanupObsoleteStations(currentPrefixes) {
         const updated = new Date().toLocaleString('de-DE');
         let out = `
 <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;font-size:16px;">
-  <div style="display:flex;align-items:flex-end;justify-content:space-between;margin-bottom:10px;">
-    <div style="font-weight:900;font-size:18px;">⚡ ChargePoint</div>
-    <div style="opacity:.7;font-size:12px;">${esc(updated)}</div>
+  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;gap:10px;">
+    <div style="font-weight:900;font-size:18px;">⚡ CPT ${esc(VERSION)}</div>
+    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:flex-end;">
+      <button onclick="this.style.background='#777'; this.innerHTML='⏳ Refresh...'; vis.conn.setState('cpt.0.tools.refreshNow', true);" style="background:#2b8cff;border:none;color:white;padding:6px 12px;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;">🔄 Refresh</button>
+      <div style="opacity:.7;font-size:12px;">${esc(updated)}</div>
+    </div>
   </div>
 
   ${(() => {
@@ -1711,9 +1716,13 @@ async cleanupObsoleteStations(currentPrefixes) {
         const updated = new Date().toLocaleString('de-DE');
         let out = `
 <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;font-size:14px;">
-  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
-    <div style="font-weight:800;font-size:16px;">⚡ ChargePoint</div>
-    <div style="opacity:.75;font-size:12px;">Update: ${esc(updated)}</div>
+  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;gap:10px;">
+    <div style="font-weight:800;font-size:16px;">⚡ CPT ${esc(VERSION)}</div>
+    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:flex-end;">
+      <button onclick="this.style.background='#777'; this.innerHTML='⏳ Refresh...'; vis.conn.setState('cpt.0.tools.refreshNow', true);" style="background:#2b8cff;border:none;color:white;padding:6px 12px;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;">🔄 Refresh</button>
+      <div style="opacity:.75;font-size:12px;">Update: ${esc(updated)}</div>
+    </div>
+  </div>
 
   ${(() => {
       const nName  = getVal('nearestType2.name') ?? '';
