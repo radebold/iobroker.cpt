@@ -2,8 +2,6 @@
 
 const utils = require('@iobroker/adapter-core');
 const axios = require('axios');
-const IO_PACKAGE = require('./io-package.json');
-const ADAPTER_VERSION = IO_PACKAGE.common.version;
 
 
 function parseNumberLocale(v) {
@@ -77,7 +75,6 @@ class CptAdapter extends utils.Adapter {
         // per-port status cache (to detect transitions to "available")
         this.lastPortStatusByKey = {}; // { ["stations.<city>.<station>|<outlet>"]: "available"|... }
         this.stationPrefixes = [];
-        this.enabledStations = [];
 
         // remember which incomplete stations were already warned (avoid log spam)
         this.invalidStationWarned = new Set();
@@ -419,28 +416,9 @@ class CptAdapter extends utils.Adapter {
             native: {},
         });
 
-        await this.setObjectNotExistsAsync('tools.refreshNow', {
-            type: 'state',
-            common: { name: 'Manuelle Aktualisierung (Trigger)', type: 'boolean', role: 'button', read: true, write: true, def: false },
-            native: {},
-        });
-
-        await this.setObjectNotExistsAsync('tools.lastRefresh', {
-            type: 'state',
-            common: { name: 'Letzte Aktualisierung', type: 'string', role: 'date', read: true, write: false },
-            native: {},
-        });
-
-        await this.setObjectNotExistsAsync('tools.lastRefreshResult', {
-            type: 'state',
-            common: { name: 'Letztes Aktualisierungsergebnis', type: 'string', role: 'text', read: true, write: false },
-            native: {},
-        });
-
         await this.setStateAsync('tools.export', { val: false, ack: true });
         await this.setStateAsync('tools.testNotify', { val: false, ack: true });
         await this.setStateAsync('tools.testNotifyAll', { val: false, ack: true });
-        await this.setStateAsync('tools.refreshNow', { val: false, ack: true });
     }
 
     async ensureCarObjects() {
@@ -1500,16 +1478,11 @@ async cleanupObsoleteStations(currentPrefixes) {
         };
 
         const updated = new Date().toLocaleString('de-DE');
-        const headerTitle = `CPT ${ADAPTER_VERSION}`;
-        const refreshButton = `<button onclick="this.style.background='#777';this.innerHTML='⏳ Refresh...';vis.conn.setState('${this.namespace}.tools.refreshNow', true);" style="background:#2b8cff;border:none;color:white;padding:6px 12px;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;">🔄 Refresh</button>`;
         let out = `
 <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;font-size:16px;">
-  <div style="display:flex;align-items:flex-end;justify-content:space-between;margin-bottom:10px;gap:10px;">
-    <div style="font-weight:900;font-size:18px;">⚡ ${esc(headerTitle)}</div>
-    <div style="display:flex;align-items:center;gap:10px;">
-      <div style="opacity:.7;font-size:12px;">${esc(updated)}</div>
-      <div>${refreshButton}</div>
-    </div>
+  <div style="display:flex;align-items:flex-end;justify-content:space-between;margin-bottom:10px;">
+    <div style="font-weight:900;font-size:18px;">⚡ ChargePoint</div>
+    <div style="opacity:.7;font-size:12px;">${esc(updated)}</div>
   </div>
 
   ${(() => {
@@ -1736,14 +1709,11 @@ async cleanupObsoleteStations(currentPrefixes) {
         };
 
         const updated = new Date().toLocaleString('de-DE');
-        const headerTitle = `CPT ${ADAPTER_VERSION}`;
-        const refreshButton = `<button onclick="this.style.background='#777';this.innerHTML='⏳ Refresh...';vis.conn.setState('${this.namespace}.tools.refreshNow', true);" style="background:#2b8cff;border:none;color:white;padding:6px 12px;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;">🔄 Refresh</button>`;
         let out = `
 <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;font-size:14px;">
-  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;gap:10px;">
-    <div style="font-weight:800;font-size:16px;">⚡ ${esc(headerTitle)}</div>
-    <div style="display:flex;align-items:center;gap:10px;"><div style="opacity:.75;font-size:12px;">Update: ${esc(updated)}</div><div>${refreshButton}</div></div>
-  </div>
+  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
+    <div style="font-weight:800;font-size:16px;">⚡ ChargePoint</div>
+    <div style="opacity:.75;font-size:12px;">Update: ${esc(updated)}</div>
 
   ${(() => {
       const nName  = getVal('nearestType2.name') ?? '';
@@ -1911,7 +1881,6 @@ async onReady() {
         this.subscribeStates('tools.export');
         this.subscribeStates('tools.testNotify');
         this.subscribeStates('tools.testNotifyAll');
-        this.subscribeStates('tools.refreshNow');
         this.subscribeStates('stations.*.*.notifyOnAvailable');
         this.subscribeStates('stations.*.*.testNotify');
 
@@ -1940,8 +1909,6 @@ async onReady() {
             if (s.enabled === undefined || s.enabled === null || s.enabled === '') return true;
             return isTrue(s.enabled);
         });
-
-        this.enabledStations = enabledStations;
 
         if (!enabledStations.length) {
             this.log.warn('Keine aktiven Stationen konfiguriert (enabled=false)');
@@ -2001,27 +1968,6 @@ async onReady() {
 
         if (state.ack) return;
 
-        if (id === `${this.namespace}.tools.refreshNow` && state.val === true) {
-            this.log.info('Manuelle Aktualisierung ausgelöst');
-            try {
-                const stations = Array.isArray(this.enabledStations) && this.enabledStations.length ? this.enabledStations : [];
-                if (!stations.length) {
-                    throw new Error('Keine aktiven Stationen konfiguriert');
-                }
-                await this.updateAllStations(stations);
-                this.scheduleCarDistanceUpdate('manual refresh');
-                this.scheduleNearestType2Update('manual refresh');
-                this.scheduleVisHtmlUpdate('manual refresh');
-                await this.setStateAsync('tools.lastRefresh', { val: new Date().toISOString(), ack: true });
-                await this.setStateAsync('tools.lastRefreshResult', { val: 'ok', ack: true });
-            } catch (e) {
-                await this.setStateAsync('tools.lastRefreshResult', { val: String(e?.message || e), ack: true });
-                this.log.warn(`Manuelle Aktualisierung fehlgeschlagen: ${e?.message || e}`);
-            }
-            await this.setStateAsync('tools.refreshNow', { val: false, ack: true });
-            return;
-        }
-
         if (id === `${this.namespace}.tools.export` && state.val === true) {
             await this.doExportStations();
             await this.setStateAsync('tools.export', { val: false, ack: true });
@@ -2053,7 +1999,6 @@ async onReady() {
                 this.log.warn(`TEST Notify ALL fehlgeschlagen: ${e.message}`);
             } finally {
                 await this.setStateAsync('tools.testNotifyAll', { val: false, ack: true });
-        await this.setStateAsync('tools.refreshNow', { val: false, ack: true });
             }
             return;
         }
