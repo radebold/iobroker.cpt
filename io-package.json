@@ -1,7 +1,7 @@
 {
   "common": {
     "name": "cpt",
-    "version": "0.7.10",
+    "version": "0.7.9",
     "title": "CPT ChargePoint",
     "titleLang": {
       "en": "CPT ChargePoint",
@@ -58,11 +58,12 @@
     "notifyCooldownMin": 15,
     "nearestType2Enabled": false,
     "nearestRadiusM": 2000,
-    "nearestPageSize": 10
+    "nearestPageSize": 10,
+    "version": "0.7.8-alpha.10"
   },
   "protectedNative": [],
   "encryptedNative": [],
   "objects": [],
   "instanceObjects": [],
-  "version": "0.6.36"
+  "version": "0.7.8-alpha.10"
 }

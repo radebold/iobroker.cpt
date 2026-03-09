@@ -272,26 +272,58 @@
             "en": "Optional: data point containing state of charge in percent. Used for notification filters."
           }
         },
-        "carLat": {
-          "type": "number",
+        "carConnectedStateId": {
+          "type": "text",
           "label": {
-            "de": "Latitude (statisch)",
-            "en": "Latitude (static)"
+            "de": "State-ID verbunden (extern)",
+            "en": "Connected state id (foreign)"
           },
           "help": {
-            "de": "Optional: Feste Latitude. Wird als initialer Wert genutzt, wenn gesetzt.",
-            "en": "Optional: Static latitude. Used as initial value if set."
+            "de": "Optional: Datenpunkt, der anzeigt, ob das Auto verbunden/angesteckt ist.",
+            "en": "Optional: data point indicating whether the car is connected/plugged in."
           }
         },
-        "carLon": {
-          "type": "number",
+        "carChargingStateId": {
+          "type": "text",
           "label": {
-            "de": "Longitude (statisch)",
-            "en": "Longitude (static)"
+            "de": "State-ID lädt (extern)",
+            "en": "Charging state id (foreign)"
           },
           "help": {
-            "de": "Optional: Feste Longitude. Wird als initialer Wert genutzt, wenn gesetzt.",
-            "en": "Optional: Static longitude. Used as initial value if set."
+            "de": "Optional: Datenpunkt, der anzeigt, ob das Auto gerade lädt. Wenn verbunden oder lädt, wird 'Nächste freie Typ2' in der VIS ausgeblendet.",
+            "en": "Optional: data point indicating whether the car is currently charging. If connected or charging, 'Nearest available Type2' is hidden in VIS."
+          }
+        },
+        "staticPosition": {
+          "type": "panel",
+          "label": {
+            "de": "Statische Position (optional)",
+            "en": "Static position (optional)"
+          },
+          "expanded": false,
+          "items": {
+            "carLat": {
+              "type": "number",
+              "label": {
+                "de": "Latitude (statisch)",
+                "en": "Latitude (static)"
+              },
+              "help": {
+                "de": "Optional: Feste Latitude. Wird als initialer Wert genutzt, wenn gesetzt.",
+                "en": "Optional: Static latitude. Used as initial value if set."
+              }
+            },
+            "carLon": {
+              "type": "number",
+              "label": {
+                "de": "Longitude (statisch)",
+                "en": "Longitude (static)"
+              },
+              "help": {
+                "de": "Optional: Feste Longitude. Wird als initialer Wert genutzt, wenn gesetzt.",
+                "en": "Optional: Static longitude. Used as initial value if set."
+              }
+            }
           }
         },
         "notifySocBelow": {
@@ -363,6 +395,339 @@
           "label": {
             "de": "Max. Ergebnisse",
             "en": "Max results"
+          }
+        }
+      }
+    },
+    "tomtom": {
+      "type": "panel",
+      "label": {
+        "de": "TomTom",
+        "en": "TomTom"
+      },
+      "items": {
+        "tomtomApiKey": {
+          "type": "text",
+          "label": {
+            "de": "API-Key",
+            "en": "API key"
+          },
+          "help": {
+            "de": "Optional. Wenn gesetzt, werden Fahrdistanzen per TomTom Routing API mit travelMode=car berechnet. Ohne API-Key bleibt die Luftlinienberechnung aktiv.",
+            "en": "Optional. If set, driving distances are calculated via TomTom Routing API with travelMode=car. Without an API key, air-line distance remains active."
+          }
+        },
+        "tomtomTraffic": {
+          "type": "checkbox",
+          "default": true,
+          "label": {
+            "de": "TomTom Verkehr berücksichtigen",
+            "en": "Use TomTom traffic"
+          },
+          "help": {
+            "de": "Aktiviert Verkehrsberücksichtigung bei der Fahrdistanzberechnung.",
+            "en": "Use traffic-aware routing for driving distance calculation."
+          }
+        },
+        "tomtomCacheMin": {
+          "type": "number",
+          "min": 0,
+          "max": 1440,
+          "default": 10,
+          "label": {
+            "de": "TomTom Cache (Minuten)",
+            "en": "TomTom cache (minutes)"
+          },
+          "help": {
+            "de": "Zwischenspeicher für identische Start-/Zielpunkte, um API-Aufrufe zu reduzieren. 0 = kein Cache.",
+            "en": "Cache for identical origin/destination pairs to reduce API calls. 0 = no cache."
+          }
+        }
+      }
+    },
+    "documentation": {
+      "type": "panel",
+      "label": {
+        "de": "Dokumentation",
+        "en": "Documentation"
+      },
+      "items": {
+        "docHeader": {
+          "type": "header",
+          "size": 2,
+          "text": {
+            "de": "CPT – Benutzerdokumentation",
+            "en": "CPT – User documentation"
+          }
+        },
+        "docIntro": {
+          "type": "staticText",
+          "text": {
+            "de": "CPT überwacht öffentliche ChargePoint-Ladestationen, berechnet optional die Entfernung von deinem Fahrzeug oder einer statischen Position und erzeugt automatisch HTML für VIS Desktop und Mobile.",
+            "en": "CPT monitors public ChargePoint charging stations, can optionally calculate the distance from your car or a static position, and automatically generates HTML for VIS desktop and mobile."
+          }
+        },
+        "div1": {
+          "type": "divider"
+        },
+        "visHeader": {
+          "type": "header",
+          "size": 3,
+          "text": {
+            "de": "VIS-Ausgabe",
+            "en": "VIS output"
+          }
+        },
+        "visText1": {
+          "type": "staticText",
+          "text": {
+            "de": "Der Adapter schreibt den erzeugten HTML-Code in diese Datenpunkte:",
+            "en": "The adapter writes the generated HTML code to these states:"
+          }
+        },
+        "visState1": {
+          "type": "staticText",
+          "text": {
+            "de": "• 0_userdata.0.Vis.ChargePoint.htmlStations – Desktop-Ansicht",
+            "en": "• 0_userdata.0.Vis.ChargePoint.htmlStations – desktop view"
+          }
+        },
+        "visState2": {
+          "type": "staticText",
+          "text": {
+            "de": "• 0_userdata.0.Vis.ChargePoint.htmlStationsMobile – mobile Ansicht",
+            "en": "• 0_userdata.0.Vis.ChargePoint.htmlStationsMobile – mobile view"
+          }
+        },
+        "visText2": {
+          "type": "staticText",
+          "text": {
+            "de": "Diese Datenpunkte kannst du in VIS direkt über ein String/HTML-Widget anzeigen.",
+            "en": "You can display these states directly in VIS using a string/HTML widget."
+          }
+        },
+        "div2": {
+          "type": "divider"
+        },
+        "stationsHeader": {
+          "type": "header",
+          "size": 3,
+          "text": {
+            "de": "Reiter Stationen",
+            "en": "Stations tab"
+          }
+        },
+        "stationsText1": {
+          "type": "staticText",
+          "text": {
+            "de": "Hier legst du die überwachten Ladestationen an. Pro Zeile können zwei Device-IDs (Port 1 und optional Port 2) hinterlegt werden.",
+            "en": "Here you define the charging stations to monitor. Each row can contain two device IDs (port 1 and optionally port 2)."
+          }
+        },
+        "stationsText2": {
+          "type": "staticText",
+          "text": {
+            "de": "„Notify“ aktiviert Benachrichtigungen für die Station. Über den Test-Button lässt sich die Stationsabfrage prüfen.",
+            "en": "“Notify” activates notifications for the station. The test button lets you verify the station query."
+          }
+        },
+        "commHeader": {
+          "type": "header",
+          "size": 3,
+          "text": {
+            "de": "Reiter Kommunikation und Abos",
+            "en": "Communication and subscriptions tabs"
+          }
+        },
+        "commText1": {
+          "type": "staticText",
+          "text": {
+            "de": "Unter Kommunikation definierst du Empfängerkanäle wie Telegram, Pushover oder open-wa. Im Reiter Abos verbindest du Stationen mit Empfängern.",
+            "en": "Under Communication you define recipient channels such as Telegram, Pushover or open-wa. In Subscriptions you connect stations to recipients."
+          }
+        },
+        "div3": {
+          "type": "divider"
+        },
+        "carHeader": {
+          "type": "header",
+          "size": 3,
+          "text": {
+            "de": "Reiter Auto",
+            "en": "Car tab"
+          }
+        },
+        "carText1": {
+          "type": "staticText",
+          "text": {
+            "de": "Optional kannst du externe State-IDs für Fahrzeugposition (Latitude/Longitude), SoC, verbunden und lädt hinterlegen. Damit kann CPT Entfernungen aus Fahrzeugsicht berechnen und Benachrichtigungen filtern.",
+            "en": "Optionally you can define external state IDs for vehicle position (latitude/longitude), SoC, connected, and charging. This allows CPT to calculate distances from the vehicle position and filter notifications."
+          }
+        },
+        "carText2": {
+          "type": "staticText",
+          "text": {
+            "de": "Wenn „verbunden“ oder „lädt“ true ist, wird die Anzeige „Nächste freie Typ2“ in der VIS ausgeblendet.",
+            "en": "If “connected” or “charging” is true, the “Nearest available Type2” section is hidden in VIS."
+          }
+        },
+        "carText3": {
+          "type": "staticText",
+          "text": {
+            "de": "Die statische Position ist ein Fallback und wird nur genutzt, wenn keine dynamischen Fahrzeugkoordinaten verfügbar sind.",
+            "en": "The static position is a fallback and is only used when no dynamic vehicle coordinates are available."
+          }
+        },
+        "div4": {
+          "type": "divider"
+        },
+        "tomtomHeader": {
+          "type": "header",
+          "size": 3,
+          "text": {
+            "de": "Reiter TomTom",
+            "en": "TomTom tab"
+          }
+        },
+        "tomtomText1": {
+          "type": "staticText",
+          "text": {
+            "de": "Wenn ein TomTom API-Key eingetragen ist, berechnet CPT die Fahrdistanz mit dem Auto statt Luftlinie. Ohne API-Key bleibt automatisch die Luftlinienberechnung aktiv.",
+            "en": "If a TomTom API key is configured, CPT calculates driving distance by car instead of airline distance. Without an API key, airline distance remains active automatically."
+          }
+        },
+        "tomtomText2": {
+          "type": "staticText",
+          "text": {
+            "de": "Die Option „TomTom Verkehr berücksichtigen“ setzt traffic=true bzw. traffic=false im Routing-Aufruf. Der Cache reduziert wiederholte API-Aufrufe für identische Start-/Zielpunkte.",
+            "en": "The “Use TomTom traffic” option sets traffic=true or traffic=false in the routing request. The cache reduces repeated API calls for identical origin/destination pairs."
+          }
+        },
+        "tomtomText3": {
+          "type": "staticText",
+          "text": {
+            "de": "Wenn die Distanz per TomTom berechnet wurde, erscheint in der VIS vor der Distanz das TomTom-Logo.",
+            "en": "If the distance was calculated by TomTom, the VIS shows the TomTom logo before the distance."
+          }
+        },
+        "div5": {
+          "type": "divider"
+        },
+        "refreshHeader": {
+          "type": "header",
+          "size": 3,
+          "text": {
+            "de": "Refresh und Status",
+            "en": "Refresh and status"
+          }
+        },
+        "refreshText1": {
+          "type": "staticText",
+          "text": {
+            "de": "Der Adapter aktualisiert die Daten automatisch im eingestellten Polling-Intervall. Zusätzlich kann über den Refresh-Button in der VIS eine manuelle Aktualisierung ausgelöst werden.",
+            "en": "The adapter updates data automatically using the configured polling interval. In addition, a manual refresh can be triggered using the refresh button in VIS."
+          }
+        },
+        "refreshText2": {
+          "type": "staticText",
+          "text": {
+            "de": "Die letzte Aktualisierung wird als Uhrzeit ohne Sekunden angezeigt, z. B. „14:32“.",
+            "en": "The last update is shown as a relative time, e.g. “just now”, “3 min ago” or “1 h ago”."
+          }
+        },
+        "statusText1": {
+          "type": "staticText",
+          "text": {
+            "de": "Typische Statuswerte sind frei, belegt und fault. Freie Ports und Portanzahl werden in der Stationsliste und in der Karte „Nächste freie Typ2“ angezeigt.",
+            "en": "Typical status values are available, occupied and fault. Free ports and total port count are shown in the station list and in the “Nearest available Type2” card."
+          }
+        },
+        "div6": {
+          "type": "divider"
+        },
+        "tipsHeader": {
+          "type": "header",
+          "size": 3,
+          "text": {
+            "de": "Tipps zur Einrichtung",
+            "en": "Setup tips"
+          }
+        },
+        "tipsText1": {
+          "type": "staticText",
+          "text": {
+            "de": "1. Zuerst Stationen im Reiter Stationen eintragen.",
+            "en": "1. First, add stations in the Stations tab."
+          }
+        },
+        "tipsText2": {
+          "type": "staticText",
+          "text": {
+            "de": "2. Danach Kommunikationskanäle und Abos konfigurieren.",
+            "en": "2. Then configure communication channels and subscriptions."
+          }
+        },
+        "tipsText3": {
+          "type": "staticText",
+          "text": {
+            "de": "3. Optional Auto-State-IDs und statische Position hinterlegen.",
+            "en": "3. Optionally configure car state IDs and a static position."
+          }
+        },
+        "tipsText4": {
+          "type": "staticText",
+          "text": {
+            "de": "4. Optional TomTom API-Key eintragen, wenn statt Luftlinie die Fahrdistanz genutzt werden soll.",
+            "en": "4. Optionally enter a TomTom API key if you want driving distance instead of airline distance."
+          }
+        },
+        "tipsText5": {
+          "type": "staticText",
+          "text": {
+            "de": "5. In VIS die beiden HTML-Datenpunkte einbinden.",
+            "en": "5. Use the two HTML states in VIS."
+          }
+        },
+        "div7": {
+          "type": "divider"
+        },
+        "linksHeader": {
+          "type": "header",
+          "size": 3,
+          "text": {
+            "de": "Links",
+            "en": "Links"
+          }
+        },
+        "link1": {
+          "type": "staticLink",
+          "label": {
+            "de": "Projekt auf GitHub öffnen",
+            "en": "Open project on GitHub"
+          },
+          "href": "https://github.com/radebold/iobroker.cpt",
+          "target": "_blank",
+          "button": true,
+          "variant": "outlined",
+          "icon": "book"
+        },
+        "link2": {
+          "type": "staticLink",
+          "label": {
+            "de": "TomTom Developer Portal öffnen",
+            "en": "Open TomTom developer portal"
+          },
+          "href": "https://developer.tomtom.com/",
+          "target": "_blank",
+          "button": true,
+          "variant": "outlined",
+          "icon": "web"
+        },
+        "docFooter": {
+          "type": "staticText",
+          "text": {
+            "de": "Hinweis: Änderungen an der Konfiguration werden erst nach dem Speichern übernommen. Bei größeren Anpassungen ist ein Neustart der Instanz sinnvoll.",
+            "en": "Note: Configuration changes only take effect after saving. After larger changes, restarting the instance is recommended."
           }
         }
       }
