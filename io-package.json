@@ -1,7 +1,7 @@
 {
   "common": {
     "name": "cpt",
-    "version": "0.7.8",
+    "version": "0.7.7-alpha.7",
     "title": "CPT ChargePoint",
     "titleLang": {
       "en": "CPT ChargePoint",
@@ -9,7 +9,7 @@
     },
     "desc": {
       "en": "Adapter for ChargePoint charging stations status",
-      "de": "Adapter f\u00fcr den Status von ChargePoint-Ladestationen"
+      "de": "Adapter für den Status von ChargePoint-Ladestationen"
     },
     "authors": [
       "radebold <radebold@gmail.com>"
