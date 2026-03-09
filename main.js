@@ -79,6 +79,8 @@ class CptAdapter extends utils.Adapter {
         this.stationPrefixes = [];
         this.enabledStations = [];
         this.refreshRunning = false;
+        this.lastManualRefreshTs = 0;
+        this.refreshMinGapMs = 5000;
 
         // remember which incomplete stations were already warned (avoid log spam)
         this.invalidStationWarned = new Set();
@@ -438,10 +440,17 @@ class CptAdapter extends utils.Adapter {
             native: {},
         });
 
+        await this.setObjectNotExistsAsync('tools.refreshRunning', {
+            type: 'state',
+            common: { name: 'Refresh läuft', type: 'boolean', role: 'indicator.working', read: true, write: false, def: false },
+            native: {},
+        });
+
         await this.setStateAsync('tools.export', { val: false, ack: true });
         await this.setStateAsync('tools.testNotify', { val: false, ack: true });
         await this.setStateAsync('tools.testNotifyAll', { val: false, ack: true });
         await this.setStateAsync('tools.refreshNow', { val: false, ack: true });
+        await this.setStateAsync('tools.refreshRunning', { val: false, ack: true });
     }
 
     async ensureCarObjects() {
@@ -1506,7 +1515,7 @@ async cleanupObsoleteStations(currentPrefixes) {
   <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;gap:10px;">
     <div style="font-weight:900;font-size:18px;">⚡ CPT ${esc(VERSION)}</div>
     <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:flex-end;">
-      <button onclick="this.style.background='#777'; this.innerHTML='⏳ Refresh...'; vis.conn.setState('cpt.0.tools.refreshNow', true);" style="background:#2b8cff;border:none;color:white;padding:6px 12px;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;">🔄 Refresh</button>
+      <button onclick="(function(btn){ if (btn.dataset.busy === '1') return; btn.dataset.busy = '1'; btn.disabled = true; btn.style.background = '#777'; btn.style.cursor = 'default'; btn.innerHTML = '⏳ Refresh...'; vis.conn.setState('cpt.0.tools.refreshNow', true); var started = Date.now(); var reset = function(){ btn.dataset.busy = '0'; btn.disabled = false; btn.style.background = '#2b8cff'; btn.style.cursor = 'pointer'; btn.innerHTML = '🔄 Refresh'; }; var timer = setInterval(function(){ try { var v = (vis.states && typeof vis.states.attr === 'function') ? vis.states.attr('cpt.0.tools.refreshNow.val') : null; if (v === false || v === 'false' || v === 0 || v === '0') { clearInterval(timer); reset(); return; } } catch (e) {} if (Date.now() - started > 15000) { clearInterval(timer); reset(); } }, 500); })(this);" style="background:#2b8cff;border:none;color:white;padding:6px 12px;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;">🔄 Refresh</button>
       <div style="opacity:.7;font-size:12px;">${esc(updated)}</div>
     </div>
   </div>
@@ -1740,7 +1749,7 @@ async cleanupObsoleteStations(currentPrefixes) {
   <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;gap:10px;">
     <div style="font-weight:800;font-size:16px;">⚡ CPT ${esc(VERSION)}</div>
     <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:flex-end;">
-      <button onclick="this.style.background='#777'; this.innerHTML='⏳ Refresh...'; vis.conn.setState('cpt.0.tools.refreshNow', true);" style="background:#2b8cff;border:none;color:white;padding:6px 12px;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;">🔄 Refresh</button>
+      <button onclick="(function(btn){ if (btn.dataset.busy === '1') return; btn.dataset.busy = '1'; btn.disabled = true; btn.style.background = '#777'; btn.style.cursor = 'default'; btn.innerHTML = '⏳ Refresh...'; vis.conn.setState('cpt.0.tools.refreshNow', true); var started = Date.now(); var reset = function(){ btn.dataset.busy = '0'; btn.disabled = false; btn.style.background = '#2b8cff'; btn.style.cursor = 'pointer'; btn.innerHTML = '🔄 Refresh'; }; var timer = setInterval(function(){ try { var v = (vis.states && typeof vis.states.attr === 'function') ? vis.states.attr('cpt.0.tools.refreshNow.val') : null; if (v === false || v === 'false' || v === 0 || v === '0') { clearInterval(timer); reset(); return; } } catch (e) {} if (Date.now() - started > 15000) { clearInterval(timer); reset(); } }, 500); })(this);" style="background:#2b8cff;border:none;color:white;padding:6px 12px;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;">🔄 Refresh</button>
       <div style="opacity:.75;font-size:12px;">Update: ${esc(updated)}</div>
     </div>
   </div>
@@ -1967,6 +1976,8 @@ async onReady() {
         }
 
         await this.updateAllStations(enabledStations);
+        await this.setStateAsync('tools.lastRefresh', { val: new Date().toISOString(), ack: true });
+        await this.setStateAsync('tools.lastRefreshResult', { val: 'startup_ok', ack: true });
 
         // initial VIS HTML write
         this.scheduleVisHtmlUpdate('initial');
@@ -2039,6 +2050,7 @@ async onReady() {
 
         if (id === `${this.namespace}.tools.refreshNow` && state.val === true) {
             const now = new Date().toISOString();
+            const nowTs = Date.now();
 
             if (this.refreshRunning) {
                 await this.setStateAsync('tools.lastRefresh', { val: now, ack: true });
@@ -2047,7 +2059,18 @@ async onReady() {
                 return;
             }
 
+            if (this.lastManualRefreshTs && (nowTs - this.lastManualRefreshTs) < this.refreshMinGapMs) {
+                const waitMs = this.refreshMinGapMs - (nowTs - this.lastManualRefreshTs);
+                await this.setStateAsync('tools.lastRefresh', { val: now, ack: true });
+                await this.setStateAsync('tools.lastRefreshResult', { val: `debounced: wait ${Math.ceil(waitMs / 1000)}s`, ack: true });
+                await this.setStateAsync('tools.refreshNow', { val: false, ack: true });
+                this.log.debug(`Manueller Refresh geblockt (Debounce ${waitMs} ms Restlaufzeit)`);
+                return;
+            }
+
             this.refreshRunning = true;
+            this.lastManualRefreshTs = nowTs;
+            await this.setStateAsync('tools.refreshRunning', { val: true, ack: true });
             try {
                 const stations = Array.isArray(this.enabledStations) ? this.enabledStations : [];
                 if (!stations.length) throw new Error('Keine aktiven Stationen konfiguriert');
@@ -2065,6 +2088,7 @@ async onReady() {
                 this.log.warn(`Manueller Refresh fehlgeschlagen: ${msg}`);
             } finally {
                 this.refreshRunning = false;
+                await this.setStateAsync('tools.refreshRunning', { val: false, ack: true });
                 await this.setStateAsync('tools.refreshNow', { val: false, ack: true });
             }
             return;
