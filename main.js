@@ -25,6 +25,29 @@ function isTrue(v) {
     return v === true || v === 'true' || v === 1 || v === '1' || v === 'on' || v === 'yes';
 }
 
+
+function parseConnectedState(v) {
+    if (v === null || v === undefined || v === '') return null;
+    if (typeof v === 'boolean') return v;
+    if (typeof v === 'number') return v !== 0;
+    const s = String(v).trim().toLowerCase();
+    if (!s) return null;
+    if (['true', '1', 'yes', 'on', 'connected', 'plugged', 'plugged_in', 'pluggedin', 'attached'].includes(s)) return true;
+    if (['false', '0', 'no', 'off', 'disconnected', 'unplugged', 'detached', 'not_connected'].includes(s)) return false;
+    return null;
+}
+
+function parseChargingState(v) {
+    if (v === null || v === undefined || v === '') return null;
+    if (typeof v === 'boolean') return v;
+    if (typeof v === 'number') return v !== 0;
+    const s = String(v).trim().toLowerCase();
+    if (!s) return null;
+    if (['true', '1', 'yes', 'on', 'charging', 'inprogress', 'in_progress', 'running', 'active'].includes(s)) return true;
+    if (['false', '0', 'no', 'off', 'not_charging', 'notcharging', 'idle', 'stopped', 'complete', 'completed', 'done'].includes(s)) return false;
+    return null;
+}
+
 class CptAdapter extends utils.Adapter {
     constructor(options) {
         super({ ...options, name: 'cpt' });
@@ -56,6 +79,10 @@ class CptAdapter extends utils.Adapter {
         this.carLatStateId = (this.config && this.config.carLatStateId) ? String(this.config.carLatStateId).trim() : '';
         this.carLonStateId = (this.config && this.config.carLonStateId) ? String(this.config.carLonStateId).trim() : '';
         this.carSocStateId = (this.config && this.config.carSocStateId) ? String(this.config.carSocStateId).trim() : '';
+        this.carConnectedStateId = (this.config && this.config.carConnectedStateId) ? String(this.config.carConnectedStateId).trim() : '';
+        this.carChargingStateId = (this.config && this.config.carChargingStateId) ? String(this.config.carChargingStateId).trim() : '';
+        this.carConnected = null;
+        this.carCharging = null;
         this.carLatStatic = (this.config && this.config.carLat !== undefined && this.config.carLat !== null && this.config.carLat !== '') ? Number(this.config.carLat) : null;
         this.carLonStatic = (this.config && this.config.carLon !== undefined && this.config.carLon !== null && this.config.carLon !== '') ? Number(this.config.carLon) : null;
 
@@ -590,6 +617,16 @@ class CptAdapter extends utils.Adapter {
             common: { name: 'Auto Ladestand (SoC)', type: 'number', role: 'value.battery', unit: '%', read: true, write: false },
             native: {},
         });
+        await this.setObjectNotExistsAsync('car.connected', {
+            type: 'state',
+            common: { name: 'Auto verbunden', type: 'boolean', role: 'indicator.connected', read: true, write: false },
+            native: {},
+        });
+        await this.setObjectNotExistsAsync('car.charging', {
+            type: 'state',
+            common: { name: 'Auto lädt', type: 'boolean', role: 'indicator', read: true, write: false },
+            native: {},
+        });
         await this.setObjectNotExistsAsync('car.source', {
             type: 'state',
             common: { name: 'Quelle (State-ID oder static)', type: 'string', role: 'text', read: true, write: false },
@@ -689,6 +726,58 @@ class CptAdapter extends utils.Adapter {
 
         // also refresh nearest type2 (SoC change can trigger notifications / relevance)
         this.scheduleNearestType2Update('socChange');
+    }
+
+
+    async initCarConnected() {
+        if (!this.carConnectedStateId) return;
+        const st = await this.getForeignStateAsync(this.carConnectedStateId).catch(() => null);
+        const parsed = st && st.val !== undefined ? parseConnectedState(st.val) : null;
+        this.log.debug(`Auto init connected: stateId='${this.carConnectedStateId}' val='${st && st.val !== undefined ? st.val : undefined}' parsed=${parsed}`);
+        if (parsed !== null) {
+            this.carConnected = parsed;
+            await this.setStateAsync('car.connected', { val: parsed, ack: true });
+            await this.setStateAsync('car.lastUpdate', { val: new Date().toISOString(), ack: true });
+        }
+    }
+
+    async initCarCharging() {
+        if (!this.carChargingStateId) return;
+        const st = await this.getForeignStateAsync(this.carChargingStateId).catch(() => null);
+        const parsed = st && st.val !== undefined ? parseChargingState(st.val) : null;
+        this.log.debug(`Auto init charging: stateId='${this.carChargingStateId}' val='${st && st.val !== undefined ? st.val : undefined}' parsed=${parsed}`);
+        if (parsed !== null) {
+            this.carCharging = parsed;
+            await this.setStateAsync('car.charging', { val: parsed, ack: true });
+            await this.setStateAsync('car.lastUpdate', { val: new Date().toISOString(), ack: true });
+        }
+    }
+
+    async updateCarConnected(value, source) {
+        const parsed = parseConnectedState(value);
+        if (parsed === null) return;
+        this.carConnected = parsed;
+        await this.setStateAsync('car.connected', { val: parsed, ack: true });
+        await this.setStateAsync('car.lastUpdate', { val: new Date().toISOString(), ack: true });
+        if (source) this.log.debug(`Auto connected update from ${source}: ${parsed}`);
+        this.scheduleVisHtmlUpdate('carConnectedChange');
+    }
+
+    async updateCarCharging(value, source) {
+        const parsed = parseChargingState(value);
+        if (parsed === null) return;
+        this.carCharging = parsed;
+        await this.setStateAsync('car.charging', { val: parsed, ack: true });
+        await this.setStateAsync('car.lastUpdate', { val: new Date().toISOString(), ack: true });
+        if (source) this.log.debug(`Auto charging update from ${source}: ${parsed}`);
+        this.scheduleVisHtmlUpdate('carChargingChange');
+    }
+
+    shouldShowNearestType2Card() {
+        const connectedKnown = typeof this.carConnected === 'boolean';
+        const chargingKnown = typeof this.carCharging === 'boolean';
+        if (!connectedKnown && !chargingKnown) return true;
+        return !(this.carConnected === true || this.carCharging === true);
     }
 
     buildBBox(lat, lon, radiusM) {
@@ -1707,14 +1796,14 @@ async cleanupObsoleteStations(currentPrefixes) {
         let out = `
 <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;font-size:16px;">
   <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;gap:10px;">
-    <div style="font-weight:900;font-size:18px;">⚡ CPT ${esc(VERSION)}</div>
+    <div style="display:flex;align-items:baseline;gap:8px;"><span style="font-weight:900;font-size:18px;">⚡ CPT</span><span style="font-weight:700;font-size:12px;opacity:.8;">${esc(VERSION)}</span></div>
     <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:flex-end;">
       <button onclick="(function(btn){ if (btn.dataset.busy === '1') return; btn.dataset.busy = '1'; btn.disabled = true; btn.style.background = '#777'; btn.style.cursor = 'default'; btn.innerHTML = '⏳ Refresh...'; vis.conn.setState('cpt.0.tools.refreshNow', true); var started = Date.now(); var reset = function(){ btn.dataset.busy = '0'; btn.disabled = false; btn.style.background = '#2b8cff'; btn.style.cursor = 'pointer'; btn.innerHTML = '🔄 Refresh'; }; var timer = setInterval(function(){ try { var v = (vis.states && typeof vis.states.attr === 'function') ? vis.states.attr('cpt.0.tools.refreshNow.val') : null; if (v === false || v === 'false' || v === 0 || v === '0') { clearInterval(timer); reset(); return; } } catch (e) {} if (Date.now() - started > 15000) { clearInterval(timer); reset(); } }, 500); })(this);" style="background:#2b8cff;border:none;color:white;padding:6px 12px;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;">🔄 Refresh</button>
       <div style="opacity:.7;font-size:12px;">${esc(updated)}</div>
     </div>
   </div>
 
-  ${(() => {
+  ${this.shouldShowNearestType2Card() ? (() => {
       const nName  = getVal('nearestType2.name') ?? '';
       const nAddr  = getVal('nearestType2.address') ?? '';
       const nDistM = getVal('nearestType2.distance.m');
@@ -1749,7 +1838,7 @@ async cleanupObsoleteStations(currentPrefixes) {
       <div style="flex:0 0 auto;">${badge(statusText, statusKind)}</div>
     </div>
   </div>`;
-  })()}
+  })() : ''}
 
   <div style="display:flex;flex-direction:column;gap:10px;">
 `;
@@ -1946,14 +2035,14 @@ async cleanupObsoleteStations(currentPrefixes) {
         let out = `
 <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;font-size:14px;">
   <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;gap:10px;">
-    <div style="font-weight:800;font-size:16px;">⚡ CPT ${esc(VERSION)}</div>
+    <div style="display:flex;align-items:baseline;gap:8px;"><span style="font-weight:800;font-size:16px;">⚡ CPT</span><span style="font-weight:700;font-size:11px;opacity:.8;">${esc(VERSION)}</span></div>
     <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:flex-end;">
       <button onclick="(function(btn){ if (btn.dataset.busy === '1') return; btn.dataset.busy = '1'; btn.disabled = true; btn.style.background = '#777'; btn.style.cursor = 'default'; btn.innerHTML = '⏳ Refresh...'; vis.conn.setState('cpt.0.tools.refreshNow', true); var started = Date.now(); var reset = function(){ btn.dataset.busy = '0'; btn.disabled = false; btn.style.background = '#2b8cff'; btn.style.cursor = 'pointer'; btn.innerHTML = '🔄 Refresh'; }; var timer = setInterval(function(){ try { var v = (vis.states && typeof vis.states.attr === 'function') ? vis.states.attr('cpt.0.tools.refreshNow.val') : null; if (v === false || v === 'false' || v === 0 || v === '0') { clearInterval(timer); reset(); return; } } catch (e) {} if (Date.now() - started > 15000) { clearInterval(timer); reset(); } }, 500); })(this);" style="background:#2b8cff;border:none;color:white;padding:6px 12px;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;">🔄 Refresh</button>
       <div style="opacity:.75;font-size:12px;">Update: ${esc(updated)}</div>
     </div>
   </div>
 
-  ${(() => {
+  ${this.shouldShowNearestType2Card() ? (() => {
       const nName  = getVal('nearestType2.name') ?? '';
       const nAddr  = getVal('nearestType2.address') ?? '';
       const nDistM = getVal('nearestType2.distance.m');
@@ -1988,7 +2077,7 @@ async cleanupObsoleteStations(currentPrefixes) {
       <div style="flex:0 0 auto;">${badge(statusText, statusKind)}</div>
     </div>
   </div>`;
-  })()}
+  })() : ''}
   </div>
   <div style="border:1px solid rgba(255,255,255,.12);border-radius:14px;overflow:hidden;background:rgba(0,0,0,.18);box-shadow:0 10px 24px rgba(0,0,0,.28);">
 `;
@@ -2108,6 +2197,10 @@ async onReady() {
         this.carLatStateId = (this.config && this.config.carLatStateId) ? String(this.config.carLatStateId).trim() : '';
         this.carLonStateId = (this.config && this.config.carLonStateId) ? String(this.config.carLonStateId).trim() : '';
         this.carSocStateId = (this.config && this.config.carSocStateId) ? String(this.config.carSocStateId).trim() : '';
+        this.carConnectedStateId = (this.config && this.config.carConnectedStateId) ? String(this.config.carConnectedStateId).trim() : '';
+        this.carChargingStateId = (this.config && this.config.carChargingStateId) ? String(this.config.carChargingStateId).trim() : '';
+        this.carConnected = null;
+        this.carCharging = null;
 
         this.carLatStatic = (this.config && this.config.carLat !== undefined && this.config.carLat !== null && this.config.carLat !== '') ? Number(this.config.carLat) : null;
         this.carLonStatic = (this.config && this.config.carLon !== undefined && this.config.carLon !== null && this.config.carLon !== '') ? Number(this.config.carLon) : null;
@@ -2119,7 +2212,7 @@ async onReady() {
         this.notifyMaxDistanceM = (this.config && this.config.notifyMaxDistanceM !== undefined && this.config.notifyMaxDistanceM !== null && this.config.notifyMaxDistanceM !== '') ? Number(this.config.notifyMaxDistanceM) : 500;
         this.notifyCooldownMin = (this.config && this.config.notifyCooldownMin !== undefined && this.config.notifyCooldownMin !== null && this.config.notifyCooldownMin !== '') ? Number(this.config.notifyCooldownMin) : 15;
 
-        this.log.debug(`Config (car): latId='${this.carLatStateId}' lonId='${this.carLonStateId}' socId='${this.carSocStateId}' latStatic=${this.carLatStatic} lonStatic=${this.carLonStatic} socBelow=${this.notifySocBelow} maxDistM=${this.notifyMaxDistanceM} cooldownMin=${this.notifyCooldownMin}`);
+        this.log.debug(`Config (car): latId='${this.carLatStateId}' lonId='${this.carLonStateId}' socId='${this.carSocStateId}' connectedId='${this.carConnectedStateId}' chargingId='${this.carChargingStateId}' latStatic=${this.carLatStatic} lonStatic=${this.carLonStatic} socBelow=${this.notifySocBelow} maxDistM=${this.notifyMaxDistanceM} cooldownMin=${this.notifyCooldownMin}`);
         this.log.debug(`Config (tomtom): enabled=${this.getTomTomEnabled()} traffic=${this.tomtomTraffic} cacheMin=${this.tomtomCacheMin}`);
 
         await this.ensureToolsObjects();
@@ -2130,10 +2223,14 @@ async onReady() {
         if (this.carLatStateId) this.subscribeForeignStates(this.carLatStateId);
         if (this.carLonStateId) this.subscribeForeignStates(this.carLonStateId);
         if (this.carSocStateId) this.subscribeForeignStates(this.carSocStateId);
+        if (this.carConnectedStateId) this.subscribeForeignStates(this.carConnectedStateId);
+        if (this.carChargingStateId) this.subscribeForeignStates(this.carChargingStateId);
 
         // initialize car position (static or from foreign)
         await this.initCarPosition();
         await this.initCarSoc();
+        await this.initCarConnected();
+        await this.initCarCharging();
         // initial distance calc + nearest station (if car GPS is known)
         this.scheduleCarDistanceUpdate('initial');
         this.scheduleNearestType2Update('initial');
@@ -2228,6 +2325,16 @@ async onReady() {
         // foreign car SoC updates (usually ack=true)
         if (id === this.carSocStateId) {
             await this.updateCarSoc(state.val, this.carSocStateId);
+            return;
+        }
+
+        if (id === this.carConnectedStateId) {
+            await this.updateCarConnected(state.val, this.carConnectedStateId);
+            return;
+        }
+
+        if (id === this.carChargingStateId) {
+            await this.updateCarCharging(state.val, this.carChargingStateId);
             return;
         }
 

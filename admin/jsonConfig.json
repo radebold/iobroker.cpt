@@ -272,26 +272,58 @@
             "en": "Optional: data point containing state of charge in percent. Used for notification filters."
           }
         },
-        "carLat": {
-          "type": "number",
+        "carConnectedStateId": {
+          "type": "text",
           "label": {
-            "de": "Latitude (statisch)",
-            "en": "Latitude (static)"
+            "de": "State-ID verbunden (extern)",
+            "en": "Connected state id (foreign)"
           },
           "help": {
-            "de": "Optional: Feste Latitude. Wird als initialer Wert genutzt, wenn gesetzt.",
-            "en": "Optional: Static latitude. Used as initial value if set."
+            "de": "Optional: Datenpunkt, der anzeigt, ob das Auto verbunden/angesteckt ist.",
+            "en": "Optional: data point indicating whether the car is connected/plugged in."
           }
         },
-        "carLon": {
-          "type": "number",
+        "carChargingStateId": {
+          "type": "text",
           "label": {
-            "de": "Longitude (statisch)",
-            "en": "Longitude (static)"
+            "de": "State-ID lädt (extern)",
+            "en": "Charging state id (foreign)"
           },
           "help": {
-            "de": "Optional: Feste Longitude. Wird als initialer Wert genutzt, wenn gesetzt.",
-            "en": "Optional: Static longitude. Used as initial value if set."
+            "de": "Optional: Datenpunkt, der anzeigt, ob das Auto gerade lädt. Wenn verbunden oder lädt, wird 'Nächste freie Typ2' in der VIS ausgeblendet.",
+            "en": "Optional: data point indicating whether the car is currently charging. If connected or charging, 'Nearest available Type2' is hidden in VIS."
+          }
+        },
+        "staticPosition": {
+          "type": "panel",
+          "label": {
+            "de": "Statische Position (optional)",
+            "en": "Static position (optional)"
+          },
+          "expanded": false,
+          "items": {
+            "carLat": {
+              "type": "number",
+              "label": {
+                "de": "Latitude (statisch)",
+                "en": "Latitude (static)"
+              },
+              "help": {
+                "de": "Optional: Feste Latitude. Wird als initialer Wert genutzt, wenn gesetzt.",
+                "en": "Optional: Static latitude. Used as initial value if set."
+              }
+            },
+            "carLon": {
+              "type": "number",
+              "label": {
+                "de": "Longitude (statisch)",
+                "en": "Longitude (static)"
+              },
+              "help": {
+                "de": "Optional: Feste Longitude. Wird als initialer Wert genutzt, wenn gesetzt.",
+                "en": "Optional: Static longitude. Used as initial value if set."
+              }
+            }
           }
         },
         "notifySocBelow": {
