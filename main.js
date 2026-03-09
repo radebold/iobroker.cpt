@@ -2,7 +2,8 @@
 
 const utils = require('@iobroker/adapter-core');
 const axios = require('axios');
-const VERSION = require('./io-package.json').common.version;
+const IO_PKG = require('./io-package.json');
+const VERSION = (IO_PKG && IO_PKG.common && IO_PKG.common.version) ? IO_PKG.common.version : '0.0.0';
 
 
 function parseNumberLocale(v) {
@@ -76,11 +77,12 @@ class CptAdapter extends utils.Adapter {
         // per-port status cache (to detect transitions to "available")
         this.lastPortStatusByKey = {}; // { ["stations.<city>.<station>|<outlet>"]: "available"|... }
         this.stationPrefixes = [];
+        this.enabledStations = [];
+        this.refreshRunning = false;
 
         // remember which incomplete stations were already warned (avoid log spam)
         this.invalidStationWarned = new Set();
         this.stationInfoByPrefix = {}; // { [prefix]: { city, name } }
-        this.enabledStations = [];
 
         this.on('ready', this.onReady.bind(this));
         this.on('stateChange', this.onStateChange.bind(this));
@@ -420,13 +422,13 @@ class CptAdapter extends utils.Adapter {
 
         await this.setObjectNotExistsAsync('tools.refreshNow', {
             type: 'state',
-            common: { name: 'Refresh jetzt (Trigger)', type: 'boolean', role: 'button', read: true, write: true, def: false },
+            common: { name: 'Jetzt aktualisieren (Trigger)', type: 'boolean', role: 'button', read: true, write: true, def: false },
             native: {},
         });
 
         await this.setObjectNotExistsAsync('tools.lastRefresh', {
             type: 'state',
-            common: { name: 'Letzter Refresh', type: 'string', role: 'date', read: true, write: false },
+            common: { name: 'Letztes Refresh', type: 'string', role: 'date', read: true, write: false },
             native: {},
         });
 
@@ -1499,16 +1501,15 @@ async cleanupObsoleteStations(currentPrefixes) {
         };
 
         const updated = new Date().toLocaleString('de-DE');
-        const headerTitle = `⚡ CPT ${VERSION}`;
-        const refreshButton = `<button id="cptRefreshBtnMobile" onclick="this.style.background='#777';this.innerHTML='⏳ Refresh...';vis.conn.setState('cpt.0.tools.refreshNow', true);" style="background:#2b8cff;border:none;color:white;padding:6px 12px;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;">🔄 Refresh</button>`;
-        const refreshScript = `<script>(function(){let last=null;setInterval(function(){try{const v=vis.states.attr('cpt.0.tools.lastRefresh.val');if(v&&v!==last){last=v;const b=document.getElementById('cptRefreshBtnMobile');if(b){b.style.background='#2b8cff';b.innerHTML='🔄 Refresh';}}}catch(e){}},1500);})();</script>`;
         let out = `
 <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;font-size:16px;">
-  <div style="display:flex;align-items:flex-end;justify-content:space-between;margin-bottom:10px;gap:10px;">
-    <div style="font-weight:900;font-size:18px;">${esc(headerTitle)}</div>
-    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:flex-end;"><div style="opacity:.7;font-size:12px;">${esc(updated)}</div>${refreshButton}</div>
+  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;gap:10px;">
+    <div style="font-weight:900;font-size:18px;">⚡ CPT ${esc(VERSION)}</div>
+    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:flex-end;">
+      <button onclick="this.style.background='#777'; this.innerHTML='⏳ Refresh...'; vis.conn.setState('cpt.0.tools.refreshNow', true);" style="background:#2b8cff;border:none;color:white;padding:6px 12px;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;">🔄 Refresh</button>
+      <div style="opacity:.7;font-size:12px;">${esc(updated)}</div>
+    </div>
   </div>
-  ${refreshScript}
 
   ${(() => {
       const nName  = getVal('nearestType2.name') ?? '';
@@ -1734,16 +1735,15 @@ async cleanupObsoleteStations(currentPrefixes) {
         };
 
         const updated = new Date().toLocaleString('de-DE');
-        const headerTitle = `⚡ CPT ${VERSION}`;
-        const refreshButton = `<button id="cptRefreshBtnDesktop" onclick="this.style.background='#777';this.innerHTML='⏳ Refresh...';vis.conn.setState('cpt.0.tools.refreshNow', true);" style="background:#2b8cff;border:none;color:white;padding:6px 12px;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;">🔄 Refresh</button>`;
-        const refreshScript = `<script>(function(){let last=null;setInterval(function(){try{const v=vis.states.attr('cpt.0.tools.lastRefresh.val');if(v&&v!==last){last=v;const b=document.getElementById('cptRefreshBtnDesktop');if(b){b.style.background='#2b8cff';b.innerHTML='🔄 Refresh';}}}catch(e){}},1500);})();</script>`;
         let out = `
 <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;font-size:14px;">
   <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;gap:10px;">
-    <div style="font-weight:800;font-size:16px;">${esc(headerTitle)}</div>
-    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:flex-end;"><div style="opacity:.75;font-size:12px;">Update: ${esc(updated)}</div>${refreshButton}</div>
+    <div style="font-weight:800;font-size:16px;">⚡ CPT ${esc(VERSION)}</div>
+    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:flex-end;">
+      <button onclick="this.style.background='#777'; this.innerHTML='⏳ Refresh...'; vis.conn.setState('cpt.0.tools.refreshNow', true);" style="background:#2b8cff;border:none;color:white;padding:6px 12px;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;">🔄 Refresh</button>
+      <div style="opacity:.75;font-size:12px;">Update: ${esc(updated)}</div>
+    </div>
   </div>
-  ${refreshScript}
 
   ${(() => {
       const nName  = getVal('nearestType2.name') ?? '';
@@ -1941,6 +1941,8 @@ async onReady() {
             return isTrue(s.enabled);
         });
 
+        this.enabledStations = enabledStations;
+
         if (!enabledStations.length) {
             this.log.warn('Keine aktiven Stationen konfiguriert (enabled=false)');
             return;
@@ -1964,7 +1966,6 @@ async onReady() {
             await this.ensureStationObjects(stationPrefix, st, city);
         }
 
-        this.enabledStations = enabledStations;
         await this.updateAllStations(enabledStations);
 
         // initial VIS HTML write
@@ -2000,25 +2001,6 @@ async onReady() {
 
         if (state.ack) return;
 
-        if (id === `${this.namespace}.tools.refreshNow` && state.val === true) {
-            try {
-                if (Array.isArray(this.enabledStations) && this.enabledStations.length) {
-                    await this.updateAllStations(this.enabledStations);
-                    this.scheduleVisHtmlUpdate('manualRefresh');
-                    this.scheduleNearestType2Update('manualRefresh');
-                    await this.setStateAsync('tools.lastRefresh', { val: new Date().toISOString(), ack: true });
-                    await this.setStateAsync('tools.lastRefreshResult', { val: 'ok', ack: true });
-                } else {
-                    await this.setStateAsync('tools.lastRefreshResult', { val: 'Keine aktiven Stationen', ack: true });
-                }
-            } catch (e) {
-                await this.setStateAsync('tools.lastRefreshResult', { val: String(e && e.message ? e.message : e), ack: true });
-            } finally {
-                await this.setStateAsync('tools.refreshNow', { val: false, ack: true });
-            }
-            return;
-        }
-
         if (id === `${this.namespace}.tools.export` && state.val === true) {
             await this.doExportStations();
             await this.setStateAsync('tools.export', { val: false, ack: true });
@@ -2050,6 +2032,40 @@ async onReady() {
                 this.log.warn(`TEST Notify ALL fehlgeschlagen: ${e.message}`);
             } finally {
                 await this.setStateAsync('tools.testNotifyAll', { val: false, ack: true });
+            }
+            return;
+        }
+
+
+        if (id === `${this.namespace}.tools.refreshNow` && state.val === true) {
+            const now = new Date().toISOString();
+
+            if (this.refreshRunning) {
+                await this.setStateAsync('tools.lastRefresh', { val: now, ack: true });
+                await this.setStateAsync('tools.lastRefreshResult', { val: 'busy', ack: true });
+                await this.setStateAsync('tools.refreshNow', { val: false, ack: true });
+                return;
+            }
+
+            this.refreshRunning = true;
+            try {
+                const stations = Array.isArray(this.enabledStations) ? this.enabledStations : [];
+                if (!stations.length) throw new Error('Keine aktiven Stationen konfiguriert');
+
+                await this.updateAllStations(stations);
+                this.scheduleVisHtmlUpdate('manual_refresh');
+                this.scheduleNearestType2Update('manual_refresh');
+                await this.setStateAsync('tools.lastRefresh', { val: now, ack: true });
+                await this.setStateAsync('tools.lastRefreshResult', { val: 'ok', ack: true });
+                this.log.info('Manueller Refresh erfolgreich ausgeführt');
+            } catch (e) {
+                const msg = e?.message || String(e);
+                await this.setStateAsync('tools.lastRefresh', { val: now, ack: true });
+                await this.setStateAsync('tools.lastRefreshResult', { val: `error: ${msg}`, ack: true });
+                this.log.warn(`Manueller Refresh fehlgeschlagen: ${msg}`);
+            } finally {
+                this.refreshRunning = false;
+                await this.setStateAsync('tools.refreshNow', { val: false, ack: true });
             }
             return;
         }
