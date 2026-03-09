@@ -891,16 +891,44 @@ class CptAdapter extends utils.Adapter {
             const latS = parseNumberLocale(nearest.lat ?? nearest.latitude);
             const lonS = parseNumberLocale(nearest.lon ?? nearest.longitude);
             const portsArr = Array.isArray(nearest.ports) ? nearest.ports : [];
-            const freePorts = Number.isFinite(parseNumberLocale(nearest.free_ports ?? nearest.freePorts))
+            let freePorts = Number.isFinite(parseNumberLocale(nearest.free_ports ?? nearest.freePorts))
                 ? parseNumberLocale(nearest.free_ports ?? nearest.freePorts)
                 : portsArr.filter(p => String(p?.status_v2 ?? p?.statusV2 ?? p?.status).toLowerCase() === 'available').length;
-            const portCount = Number.isFinite(parseNumberLocale(nearest.total_port_count ?? nearest.portCount))
+            let portCount = Number.isFinite(parseNumberLocale(nearest.total_port_count ?? nearest.portCount))
                 ? parseNumberLocale(nearest.total_port_count ?? nearest.portCount)
                 : (Number.isFinite(parseNumberLocale(nearest.total_port_count)) ? parseNumberLocale(nearest.total_port_count) : portsArr.length);
             const stationId = String(nearest.device_id ?? nearest.station_id ?? nearest.id ?? '').trim();
 
-            if (name) await this.setStateAsync('nearestType2.name', { val: name, ack: true });
-            await this.setStateAsync('nearestType2.address', { val: addressFull || '', ack: true });
+            // Prefer internally refreshed station states when we can map the nearest API hit to a known station.
+            // This keeps the "Nächste freie Typ2" card consistent with the station list below.
+            const nearestPrefix = stationId ? this.stationPrefixByDeviceId[stationId] : null;
+            if (nearestPrefix) {
+                const [freeSt, countSt, nameSt, addrSt] = await Promise.all([
+                    this.getStateAsync(nearestPrefix + '.freePorts').catch(() => null),
+                    this.getStateAsync(nearestPrefix + '.portCount').catch(() => null),
+                    this.getStateAsync(nearestPrefix + '.name').catch(() => null),
+                    this.getStateAsync(nearestPrefix + '.address').catch(() => null),
+                ]);
+                if (freeSt?.val !== undefined && freeSt?.val !== null && freeSt?.val !== '') {
+                    const v = Number(freeSt.val);
+                    if (Number.isFinite(v)) freePorts = v;
+                }
+                if (countSt?.val !== undefined && countSt?.val !== null && countSt?.val !== '') {
+                    const v = Number(countSt.val);
+                    if (Number.isFinite(v)) portCount = v;
+                }
+                if ((!name || !String(name).trim()) && nameSt?.val) {
+                    nearest.station_name = String(nameSt.val);
+                }
+                if ((!addressFull || !String(addressFull).trim()) && addrSt?.val) {
+                    nearest.address = String(addrSt.val);
+                }
+            }
+
+            const resolvedName = nearest.station_name || nearest.name || nearest.name1 || name || '';
+            const resolvedAddress = (nearest.address || addressFull || '').toString().trim();
+            if (resolvedName) await this.setStateAsync('nearestType2.name', { val: resolvedName, ack: true });
+            await this.setStateAsync('nearestType2.address', { val: resolvedAddress || '', ack: true });
             if (Number.isFinite(distM)) {
                 await this.setStateAsync('nearestType2.distance.m', { val: Math.round(distM), ack: true });
                 await this.setStateAsync('nearestType2.distance.km', { val: Math.round((distM / 1000) * 100) / 100, ack: true });
