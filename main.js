@@ -2324,7 +2324,25 @@ async onReady() {
         this.scheduleVisHtmlUpdate('initial');
 
         this.pollInterval = setInterval(() => {
-            this.updateAllStations(enabledStations).catch((e) => this.log.error(`Polling-Fehler: ${e?.message || e}`));
+            this.updateAllStations(enabledStations)
+                .then(async () => {
+                    await this.setStateAsync('tools.lastRefresh', {
+                        val: new Date().toISOString(),
+                        ack: true,
+                    });
+                    await this.setStateAsync('tools.lastRefreshResult', {
+                        val: 'poll_ok',
+                        ack: true,
+                    });
+                })
+                .catch(async (e) => {
+                    const msg = e?.message || String(e);
+                    this.log.error(`Polling-Fehler: ${msg}`);
+                    await this.setStateAsync('tools.lastRefreshResult', {
+                        val: `poll_error: ${msg}`,
+                        ack: true,
+                    });
+                });
         }, intervalMin * 60 * 1000);
 
         this.log.info(`Polling-Intervall: ${intervalMin} Minuten, Stationen (aktiv): ${enabledStations.length}`);
