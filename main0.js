@@ -1806,6 +1806,7 @@ async cleanupObsoleteStations(currentPrefixes) {
   <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;gap:10px;">
     <div style="display:flex;align-items:baseline;gap:8px;"><span style="font-weight:900;font-size:18px;">⚡ CPT</span><span style="font-weight:700;font-size:12px;opacity:.8;">${esc(VERSION)}</span></div>
     <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:flex-end;">
+      <button onclick="(function(btn){ if (btn.dataset.busy === '1') return; btn.dataset.busy = '1'; btn.disabled = true; btn.style.background = '#777'; btn.style.cursor = 'default'; btn.innerHTML = '⏳ Refresh...'; var conn = (window.vis && vis.conn) ? vis.conn : ((window.parent && window.parent.vis && window.parent.vis.conn) ? window.parent.vis.conn : null); if (conn && typeof conn.setState === 'function') { conn.setState('cpt.0.tools.refreshNow', true, false); } var started = Date.now(); var reset = function(){ btn.dataset.busy = '0'; btn.disabled = false; btn.style.background = '#2b8cff'; btn.style.cursor = 'pointer'; btn.innerHTML = '🔄 Refresh'; }; var timer = setInterval(function(){ try { var statesApi = (window.vis && vis.states && typeof vis.states.attr === 'function') ? vis.states : ((window.parent && window.parent.vis && window.parent.vis.states && typeof window.parent.vis.states.attr === 'function') ? window.parent.vis.states : null); var v = statesApi ? statesApi.attr('cpt.0.tools.refreshNow.val') : null; if (v === false || v === 'false' || v === 0 || v === '0') { clearInterval(timer); reset(); return; } } catch (e) {} if (Date.now() - started > 15000) { clearInterval(timer); reset(); } }, 500); })(this);" style="background:#2b8cff;border:none;color:white;padding:6px 12px;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;">🔄 Refresh</button>
       <div style="opacity:.7;font-size:12px;">${esc(updated)}</div>
     </div>
   </div>
@@ -2061,7 +2062,7 @@ async cleanupObsoleteStations(currentPrefixes) {
   <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;gap:10px;">
     <div style="display:flex;align-items:baseline;gap:8px;"><span style="font-weight:800;font-size:16px;">⚡ CPT</span><span style="font-weight:700;font-size:11px;opacity:.8;">${esc(VERSION)}</span></div>
     <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:flex-end;">
-      <button onclick="(function(btn){ if (btn.dataset.busy === '1') return; btn.dataset.busy = '1'; btn.disabled = true; btn.style.background = '#777'; btn.style.cursor = 'default'; btn.innerHTML = '⏳ Refresh...'; vis.conn.setState('cpt.0.tools.refreshNow', true); var started = Date.now(); var reset = function(){ btn.dataset.busy = '0'; btn.disabled = false; btn.style.background = '#2b8cff'; btn.style.cursor = 'pointer'; btn.innerHTML = '🔄 Refresh'; }; var timer = setInterval(function(){ try { var v = (vis.states && typeof vis.states.attr === 'function') ? vis.states.attr('cpt.0.tools.refreshNow.val') : null; if (v === false || v === 'false' || v === 0 || v === '0') { clearInterval(timer); reset(); return; } } catch (e) {} if (Date.now() - started > 15000) { clearInterval(timer); reset(); } }, 500); })(this);" style="background:#2b8cff;border:none;color:white;padding:6px 12px;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;">🔄 Refresh</button>
+      <button onclick="(function(btn){ if (btn.dataset.busy === '1') return; btn.dataset.busy = '1'; btn.disabled = true; btn.style.background = '#777'; btn.style.cursor = 'default'; btn.innerHTML = '⏳ Refresh...'; var conn = (window.vis && vis.conn) ? vis.conn : ((window.parent && window.parent.vis && window.parent.vis.conn) ? window.parent.vis.conn : null); if (conn && typeof conn.setState === 'function') { conn.setState('cpt.0.tools.refreshNow', true, false); } var started = Date.now(); var reset = function(){ btn.dataset.busy = '0'; btn.disabled = false; btn.style.background = '#2b8cff'; btn.style.cursor = 'pointer'; btn.innerHTML = '🔄 Refresh'; }; var timer = setInterval(function(){ try { var statesApi = (window.vis && vis.states && typeof vis.states.attr === 'function') ? vis.states : ((window.parent && window.parent.vis && window.parent.vis.states && typeof window.parent.vis.states.attr === 'function') ? window.parent.vis.states : null); var v = statesApi ? statesApi.attr('cpt.0.tools.refreshNow.val') : null; if (v === false || v === 'false' || v === 0 || v === '0') { clearInterval(timer); reset(); return; } } catch (e) {} if (Date.now() - started > 15000) { clearInterval(timer); reset(); } }, 500); })(this);" style="background:#2b8cff;border:none;color:white;padding:6px 12px;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;">🔄 Refresh</button>
       <div style="opacity:.75;font-size:12px;">${esc(updated)}</div>
     </div>
   </div>
@@ -2323,7 +2324,25 @@ async onReady() {
         this.scheduleVisHtmlUpdate('initial');
 
         this.pollInterval = setInterval(() => {
-            this.updateAllStations(enabledStations).catch((e) => this.log.error(`Polling-Fehler: ${e?.message || e}`));
+            this.updateAllStations(enabledStations)
+                .then(async () => {
+                    await this.setStateAsync('tools.lastRefresh', {
+                        val: new Date().toISOString(),
+                        ack: true,
+                    });
+                    await this.setStateAsync('tools.lastRefreshResult', {
+                        val: 'poll_ok',
+                        ack: true,
+                    });
+                })
+                .catch(async (e) => {
+                    const msg = e?.message || String(e);
+                    this.log.error(`Polling-Fehler: ${msg}`);
+                    await this.setStateAsync('tools.lastRefreshResult', {
+                        val: `poll_error: ${msg}`,
+                        ack: true,
+                    });
+                });
         }, intervalMin * 60 * 1000);
 
         this.log.info(`Polling-Intervall: ${intervalMin} Minuten, Stationen (aktiv): ${enabledStations.length}`);
