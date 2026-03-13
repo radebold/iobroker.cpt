@@ -1727,8 +1727,9 @@ async cleanupObsoleteStations(currentPrefixes) {
         const stationStates = await this.getStatesAsync(stationsRoot + '*');
         const nearestStates = await this.getStatesAsync(this.namespace + '.nearestType2.*');
         const toolStates = await this.getStatesAsync(this.namespace + '.tools.*');
+        const carStates = await this.getStatesAsync(this.namespace + '.car.*');
 
-        const all = { ...(stationStates || {}), ...(nearestStates || {}), ...(toolStates || {}) };
+        const all = { ...(stationStates || {}), ...(nearestStates || {}), ...(toolStates || {}), ...(carStates || {}) };
 
         const prefixesAll = Object.keys(stationStates || {})
             .filter((k) => k.endsWith('.name') && stationStates[k] && stationStates[k].val !== undefined)
@@ -1801,12 +1802,16 @@ async cleanupObsoleteStations(currentPrefixes) {
         };
 
         const updated = lastRefreshText();
+        const socRaw = getVal('car.soc');
+        const socText = (socRaw !== undefined && socRaw !== null && socRaw !== '' && Number.isFinite(Number(socRaw)))
+            ? `Ladezustand: ${Math.round(Number(socRaw))} %`
+            : 'Ladezustand: —';
         let out = `
 <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;font-size:16px;">
   <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;gap:10px;">
-    <div style="display:flex;align-items:baseline;gap:8px;"><span style="font-weight:900;font-size:18px;">⚡ CPT</span><span style="font-weight:700;font-size:12px;opacity:.8;">${esc(VERSION)}</span></div>
+    <div style="display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;"><span style="font-weight:900;font-size:18px;">⚡ CPT</span><span style="font-weight:700;font-size:12px;opacity:.8;">${esc(VERSION)}</span><span style="font-size:12px;opacity:.9;">${esc(socText)}</span></div>
     <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:flex-end;">
-      <div style="opacity:.7;font-size:12px;">${esc(updated)}</div>
+      <div style="opacity:.7;font-size:12px;">Last refresh: ${esc(updated)}</div>
     </div>
   </div>
 
