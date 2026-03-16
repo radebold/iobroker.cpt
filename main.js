@@ -455,10 +455,27 @@ class CptAdapter extends utils.Adapter {
         return { ok, failed, note: 'sent' };
     }
 
+    getEstimatedChargeEndText() {
+        const soc = Number(this.carSoc);
+        if (!Number.isFinite(soc)) return '';
+
+        const boundedSoc = Math.max(0, Math.min(100, soc));
+        const leadMinutes = 10;
+        const minutesFrom0To100 = 180;
+        const remainingMinutes = Math.round(((100 - boundedSoc) / 100) * minutesFrom0To100);
+        const totalMinutes = leadMinutes + remainingMinutes;
+
+        const eta = new Date(Date.now() + totalMinutes * 60 * 1000);
+        const hh = String(eta.getHours()).padStart(2, '0');
+        const mm = String(eta.getMinutes()).padStart(2, '0');
+        return ` Geplantes Ladezeitende wäre ca. ${hh}:${mm} Uhr.`;
+    }
+
     async sendAvailableNotification(ctx) {
         const prefix = ctx.isTest ? 'TEST: ' : '';
         const details = ctx.freePorts !== undefined && ctx.portCount !== undefined ? ` (${ctx.freePorts}/${ctx.portCount})` : '';
-        const text = `${prefix}Ladestation ${ctx.station} in ${ctx.city} ist nun frei${details}`;
+        const etaText = this.getEstimatedChargeEndText();
+        const text = `${prefix}Ladestation ${ctx.station} in ${ctx.city} ist nun frei${details}.${etaText}`;
         return this.sendMessageToChannels(text, ctx);
     }
 
@@ -1119,7 +1136,7 @@ class CptAdapter extends utils.Adapter {
 
     getNotifyMeta(stationPrefixRel) {
         if (!this.notifyMetaByStation[stationPrefixRel]) {
-            this.notifyMetaByStation[stationPrefixRel] = { notifiedPosKey: null, lastSent: 0 };
+            this.notifyMetaByStation[stationPrefixRel] = { notifiedPosKey: null, lastSent: 0, inRange: false };
         }
         return this.notifyMetaByStation[stationPrefixRel];
     }
@@ -1183,16 +1200,29 @@ class CptAdapter extends utils.Adapter {
 
         const posKey = this.getCarPosKey();
 
-        // Reset notified when station is not free anymore
+        // Reset notify state when station is not free anymore
         if (!(Number(freePorts) > 0)) {
             meta.notifiedPosKey = null;
+            meta.inRange = false;
             return;
         }
 
         // Require a stable car position (needed for distance filter + "notify again only after position changed")
         if (!posKey) return;
 
-        // Only one notification per free phase AND car position key
+        // Evaluate enter/exit against the configured radius with hysteresis
+        const rangeState = await this.computeInRange(stationPrefixRel);
+        if (rangeState.exited) {
+            meta.notifiedPosKey = null;
+            this.log.debug(`Notify-Reset (${stationName}): Fahrzeug hat den Radius verlassen (dist=${rangeState.distanceM ?? 'n/a'}m)`);
+        }
+
+        // Outside of range: no notification
+        if (!rangeState.now) return;
+
+        // Only one notification per free phase AND car position key while staying in range.
+        // After leaving the radius, meta.notifiedPosKey is reset above, so re-entering can notify again
+        // even if the car returns to the same rounded position.
         if (meta.notifiedPosKey && meta.notifiedPosKey === posKey) return;
 
         // Station toggle OR subscriptions decide whether station is relevant
@@ -1216,7 +1246,7 @@ class CptAdapter extends utils.Adapter {
         await this.notifySubscribers({ stationPrefixRel, city, stationName, freePorts, portCount, isTest: false });
         meta.notifiedPosKey = posKey;
         meta.lastSent = Date.now();
-        this.log.info(`Notify (${reason}): ${stationName} (${city}) freePorts=${freePorts}/${portCount} (SoC=${f.soc ?? 'n/a'}%, dist=${f.distanceM ?? 'n/a'}m)`);
+        this.log.info(`Notify (${reason}): ${stationName} (${city}) freePorts=${freePorts}/${portCount} (SoC=${f.soc ?? 'n/a'}%, dist=${f.distanceM ?? 'n/a'}m, entered=${rangeState.entered})`);
     }
 
     
