@@ -856,6 +856,19 @@ class CptAdapter extends utils.Adapter {
         return null;
     }
 
+    async clearNearestType2States(reason = '') {
+        const textIds = ['name', 'address', 'stationId', 'distanceType'];
+        const numIds = ['distance.m', 'distance.km', 'lat', 'lon', 'freePorts', 'portCount'];
+        for (const id of textIds) {
+            await this.setStateAsync(`nearestType2.${id}`, { val: '', ack: true });
+        }
+        for (const id of numIds) {
+            await this.setStateAsync(`nearestType2.${id}`, { val: 0, ack: true });
+        }
+        await this.setStateAsync('nearestType2.lastUpdate', { val: new Date().toISOString(), ack: true });
+        if (reason) this.log.debug(`nearestType2 geleert: ${reason}`);
+    }
+
     async updateNearestType2(lat, lon) {
         // NOTE: A previous build accidentally inserted an invalid stray "(lat, lon) {" line here.
         // Keep this method as the only function header.
@@ -899,6 +912,7 @@ class CptAdapter extends utils.Adapter {
             if (resp.status < 200 || resp.status >= 300) {
                 this.log.warn(`nearestType2: HTTP ${resp.status}`);
                 await this.setStateAsync('nearestType2.lastError', { val: `HTTP ${resp.status}`, ack: true });
+                await this.clearNearestType2States(`HTTP ${resp.status}`);
                 return;
             }
             // Axios may return plain text even if it is JSON. Be robust.
@@ -970,6 +984,7 @@ class CptAdapter extends utils.Adapter {
             if (!nearest) {
                 this.log.info('nearestType2: keine Treffer');
                 await this.setStateAsync('nearestType2.lastError', { val: 'keine Treffer', ack: true });
+                await this.clearNearestType2States('keine Treffer');
                 return;
             }
 
@@ -1048,6 +1063,8 @@ class CptAdapter extends utils.Adapter {
             await this.setStateAsync('nearestType2.stationId', { val: stationId, ack: true });
             await this.setStateAsync('nearestType2.lastUpdate', { val: new Date().toISOString(), ack: true });
         } catch (e) {
+            await this.setStateAsync('nearestType2.lastError', { val: e.message, ack: true });
+            await this.clearNearestType2States(`Exception: ${e.message}`);
             this.log.debug(`nearestType2 Fehler: ${e.message}`);
         }
     }
@@ -1517,6 +1534,7 @@ class CptAdapter extends utils.Adapter {
                     reason: 'portAvailable',
                 });
             }
+
 
             this.log.debug(`Aktualisiert: ${st.name} city=${city} freePorts=${freePorts}/${portCount} derived=${derived}`);
         }
