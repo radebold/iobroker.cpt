@@ -138,6 +138,63 @@ class CptAdapter extends utils.Adapter {
             .replace(/^_+|_+$/g, '');
     }
 
+    normalizeCompareText(text) {
+        return String(text || '')
+            .toLowerCase()
+            .normalize('NFD')
+            .replace(/[̀-ͯ]/g, '')
+            .replace(/[^a-z0-9]+/g, ' ')
+            .replace(/\s+/g, ' ')
+            .trim();
+    }
+
+    async findKnownStationPrefixForNearestCandidate(candidate) {
+        const stationId = String(candidate?.device_id ?? candidate?.station_id ?? candidate?.id ?? '').trim();
+        if (stationId && this.stationPrefixByDeviceId[stationId]) {
+            return this.stationPrefixByDeviceId[stationId];
+        }
+
+        const candLat = parseNumberLocale(candidate?.lat ?? candidate?.latitude);
+        const candLon = parseNumberLocale(candidate?.lon ?? candidate?.longitude);
+        if (Number.isFinite(candLat) && Number.isFinite(candLon)) {
+            let best = null;
+            for (const stationPrefix of this.stationPrefixes || []) {
+                const [latSt, lonSt] = await Promise.all([
+                    this.getStateAsync(`${stationPrefix}.gps.lat`).catch(() => null),
+                    this.getStateAsync(`${stationPrefix}.gps.lon`).catch(() => null),
+                ]);
+                const stLat = Number(latSt?.val);
+                const stLon = Number(lonSt?.val);
+                if (!Number.isFinite(stLat) || !Number.isFinite(stLon)) continue;
+                const distM = this.haversineKm(candLat, candLon, stLat, stLon) * 1000;
+                if (!Number.isFinite(distM)) continue;
+                if (!best || distM < best.distM) best = { stationPrefix, distM };
+            }
+            if (best && best.distM <= 150) {
+                return best.stationPrefix;
+            }
+        }
+
+        const candName = this.normalizeCompareText(candidate?.station_name || candidate?.name || candidate?.name1 || '');
+        const candCity = this.normalizeCompareText(candidate?.city || candidate?.town || candidate?.locality || candidate?.municipality || '');
+        if (candName) {
+            for (const stationPrefix of this.stationPrefixes || []) {
+                const [nameSt, citySt] = await Promise.all([
+                    this.getStateAsync(`${stationPrefix}.name`).catch(() => null),
+                    this.getStateAsync(`${stationPrefix}.city`).catch(() => null),
+                ]);
+                const knownName = this.normalizeCompareText(nameSt?.val || '');
+                const knownCity = this.normalizeCompareText(citySt?.val || '');
+                if (!knownName) continue;
+                const nameMatch = knownName === candName || knownName.includes(candName) || candName.includes(knownName);
+                const cityMatch = !candCity || !knownCity || candCity === knownCity;
+                if (nameMatch && cityMatch) return stationPrefix;
+            }
+        }
+
+        return null;
+    }
+
     normalizeStatus(val) {
         const s = (val ?? 'unknown').toString().toLowerCase();
         return s || 'unknown';
@@ -957,13 +1014,16 @@ class CptAdapter extends utils.Adapter {
                     // must have at least one available port
                     if (!(Number(freePorts) > 0)) continue;
 
-                    const stationId = String(st?.device_id ?? st?.station_id ?? st?.id ?? '').trim();
-                    const prefix = stationId ? this.stationPrefixByDeviceId[stationId] : null;
+                    const prefix = await this.findKnownStationPrefixForNearestCandidate(st);
                     if (prefix) {
-                        const stState = await this.getStateAsync(prefix + '.statusDerived').catch(() => null);
+                        const [stState, freeState] = await Promise.all([
+                            this.getStateAsync(prefix + '.statusDerived').catch(() => null),
+                            this.getStateAsync(prefix + '.freePorts').catch(() => null),
+                        ]);
                         const polled = stState ? stState.val : undefined;
-                        if (isBadStatus(polled)) {
-                            // skip: polled status indicates fault/unavailable
+                        const polledFree = Number(freeState?.val);
+                        if (isBadStatus(polled) || (Number.isFinite(polledFree) && polledFree <= 0)) {
+                            // skip: internally polled station says unavailable/fault or no free ports
                             continue;
                         }
                     }
@@ -1021,14 +1081,17 @@ class CptAdapter extends utils.Adapter {
             const stationId = String(nearest.device_id ?? nearest.station_id ?? nearest.id ?? '').trim();
 
             // Prefer internally refreshed station states when we can map the nearest API hit to a known station.
-            // This keeps the "Nächste freie Typ2" card consistent with the station list below.
-            const nearestPrefix = stationId ? this.stationPrefixByDeviceId[stationId] : null;
+            // Match first by exact deviceId, then by GPS/name proximity. This keeps the travel card
+            // consistent with the locally polled fixed stations below.
+            const nearestPrefix = await this.findKnownStationPrefixForNearestCandidate(nearest);
             if (nearestPrefix) {
-                const [freeSt, countSt, nameSt, addrSt] = await Promise.all([
+                const [freeSt, countSt, nameSt, citySt, latKnownSt, lonKnownSt] = await Promise.all([
                     this.getStateAsync(nearestPrefix + '.freePorts').catch(() => null),
                     this.getStateAsync(nearestPrefix + '.portCount').catch(() => null),
                     this.getStateAsync(nearestPrefix + '.name').catch(() => null),
-                    this.getStateAsync(nearestPrefix + '.address').catch(() => null),
+                    this.getStateAsync(nearestPrefix + '.city').catch(() => null),
+                    this.getStateAsync(nearestPrefix + '.gps.lat').catch(() => null),
+                    this.getStateAsync(nearestPrefix + '.gps.lon').catch(() => null),
                 ]);
                 if (freeSt?.val !== undefined && freeSt?.val !== null && freeSt?.val !== '') {
                     const v = Number(freeSt.val);
@@ -1038,12 +1101,22 @@ class CptAdapter extends utils.Adapter {
                     const v = Number(countSt.val);
                     if (Number.isFinite(v)) portCount = v;
                 }
-                if ((!name || !String(name).trim()) && nameSt?.val) {
+                if (nameSt?.val) {
                     nearest.station_name = String(nameSt.val);
                 }
-                if ((!addressFull || !String(addressFull).trim()) && addrSt?.val) {
-                    nearest.address = String(addrSt.val);
+                if (citySt?.val) {
+                    const cityVal = String(citySt.val).trim();
+                    if (cityVal) {
+                        nearest.city = cityVal;
+                        if (!addressFull || !String(addressFull).trim()) {
+                            nearest.address = cityVal;
+                        }
+                    }
                 }
+                const knownLat = Number(latKnownSt?.val);
+                const knownLon = Number(lonKnownSt?.val);
+                if (Number.isFinite(knownLat)) nearest.lat = knownLat;
+                if (Number.isFinite(knownLon)) nearest.lon = knownLon;
             }
 
             const resolvedName = nearest.station_name || nearest.name || nearest.name1 || name || '';
