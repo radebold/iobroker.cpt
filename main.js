@@ -122,11 +122,69 @@ class CptAdapter extends utils.Adapter {
         // remember which incomplete stations were already warned (avoid log spam)
         this.invalidStationWarned = new Set();
         this.stationInfoByPrefix = {}; // { [prefix]: { city, name } }
+        this.stationErrorMeta = {}; // { [runtimeKey]: { consecutiveHardErrors:number, autoDisabled:boolean, lastError:string, lastErrorAt:string } }
+        this.stationAutoDisableThreshold = 10;
 
         this.on('ready', this.onReady.bind(this));
         this.on('stateChange', this.onStateChange.bind(this));
         this.on('message', this.onMessage.bind(this));
         this.on('unload', this.onUnload.bind(this));
+    }
+
+
+    getStationRuntimeKey(station) {
+        const d1 = station?.deviceId1 ?? '';
+        const d2 = station?.deviceId2 ?? '';
+        return `${d1}|${d2}`;
+    }
+
+    async resetStationErrorMeta(station, stationPrefix) {
+        const key = this.getStationRuntimeKey(station);
+        const meta = this.stationErrorMeta[key] || { consecutiveHardErrors: 0, autoDisabled: false, lastError: '', lastErrorAt: '' };
+        meta.consecutiveHardErrors = 0;
+        meta.lastError = '';
+        meta.lastErrorAt = '';
+        this.stationErrorMeta[key] = meta;
+        if (stationPrefix) {
+            await this.updateStateIfChanged(`${stationPrefix}.consecutiveHardErrors`, 0);
+            await this.updateStateIfChanged(`${stationPrefix}.lastError`, '');
+            await this.updateStateIfChanged(`${stationPrefix}.lastErrorAt`, '');
+            await this.updateStateIfChanged(`${stationPrefix}.autoDisabled`, false);
+            await this.updateStateIfChanged(`${stationPrefix}.pollingActive`, true);
+        }
+    }
+
+    async registerStationFetchError(station, stationPrefix, errInfo) {
+        const key = this.getStationRuntimeKey(station);
+        const meta = this.stationErrorMeta[key] || { consecutiveHardErrors: 0, autoDisabled: false, lastError: '', lastErrorAt: '' };
+        const status = Number(errInfo?.status);
+        const isHard = status === 400 || status === 404;
+        const now = new Date().toISOString();
+        meta.lastError = String(errInfo?.message || 'Fetch fehlgeschlagen');
+        meta.lastErrorAt = now;
+        if (isHard) {
+            meta.consecutiveHardErrors = Number(meta.consecutiveHardErrors || 0) + 1;
+            if (!meta.autoDisabled && meta.consecutiveHardErrors >= this.stationAutoDisableThreshold) {
+                meta.autoDisabled = true;
+                this.log.warn(`Station ${station?.name || key} wurde nach ${meta.consecutiveHardErrors} harten Fehlern automatisch deaktiviert (${meta.lastError})`);
+            }
+        } else {
+            meta.consecutiveHardErrors = 0;
+        }
+        this.stationErrorMeta[key] = meta;
+        if (stationPrefix) {
+            await this.updateStateIfChanged(`${stationPrefix}.consecutiveHardErrors`, Number(meta.consecutiveHardErrors || 0));
+            await this.updateStateIfChanged(`${stationPrefix}.lastError`, meta.lastError || '');
+            await this.updateStateIfChanged(`${stationPrefix}.lastErrorAt`, meta.lastErrorAt || '');
+            await this.updateStateIfChanged(`${stationPrefix}.autoDisabled`, !!meta.autoDisabled);
+            await this.updateStateIfChanged(`${stationPrefix}.pollingActive`, !meta.autoDisabled);
+        }
+        return meta;
+    }
+
+    isStationAutoDisabled(station) {
+        const key = this.getStationRuntimeKey(station);
+        return this.stationErrorMeta[key]?.autoDisabled === true;
     }
 
     makeSafeName(name) {
@@ -136,6 +194,63 @@ class CptAdapter extends utils.Adapter {
             .replace(/[^a-z0-9]/g, '_')
             .replace(/_+/g, '_')
             .replace(/^_+|_+$/g, '');
+    }
+
+    normalizeCompareText(text) {
+        return String(text || '')
+            .toLowerCase()
+            .normalize('NFD')
+            .replace(/[̀-ͯ]/g, '')
+            .replace(/[^a-z0-9]+/g, ' ')
+            .replace(/\s+/g, ' ')
+            .trim();
+    }
+
+    async findKnownStationPrefixForNearestCandidate(candidate) {
+        const stationId = String(candidate?.device_id ?? candidate?.station_id ?? candidate?.id ?? '').trim();
+        if (stationId && this.stationPrefixByDeviceId[stationId]) {
+            return this.stationPrefixByDeviceId[stationId];
+        }
+
+        const candLat = parseNumberLocale(candidate?.lat ?? candidate?.latitude);
+        const candLon = parseNumberLocale(candidate?.lon ?? candidate?.longitude);
+        if (Number.isFinite(candLat) && Number.isFinite(candLon)) {
+            let best = null;
+            for (const stationPrefix of this.stationPrefixes || []) {
+                const [latSt, lonSt] = await Promise.all([
+                    this.getStateAsync(`${stationPrefix}.gps.lat`).catch(() => null),
+                    this.getStateAsync(`${stationPrefix}.gps.lon`).catch(() => null),
+                ]);
+                const stLat = Number(latSt?.val);
+                const stLon = Number(lonSt?.val);
+                if (!Number.isFinite(stLat) || !Number.isFinite(stLon)) continue;
+                const distM = this.haversineKm(candLat, candLon, stLat, stLon) * 1000;
+                if (!Number.isFinite(distM)) continue;
+                if (!best || distM < best.distM) best = { stationPrefix, distM };
+            }
+            if (best && best.distM <= 150) {
+                return best.stationPrefix;
+            }
+        }
+
+        const candName = this.normalizeCompareText(candidate?.station_name || candidate?.name || candidate?.name1 || '');
+        const candCity = this.normalizeCompareText(candidate?.city || candidate?.town || candidate?.locality || candidate?.municipality || '');
+        if (candName) {
+            for (const stationPrefix of this.stationPrefixes || []) {
+                const [nameSt, citySt] = await Promise.all([
+                    this.getStateAsync(`${stationPrefix}.name`).catch(() => null),
+                    this.getStateAsync(`${stationPrefix}.city`).catch(() => null),
+                ]);
+                const knownName = this.normalizeCompareText(nameSt?.val || '');
+                const knownCity = this.normalizeCompareText(citySt?.val || '');
+                if (!knownName) continue;
+                const nameMatch = knownName === candName || knownName.includes(candName) || candName.includes(knownName);
+                const cityMatch = !candCity || !knownCity || candCity === knownCity;
+                if (nameMatch && cityMatch) return stationPrefix;
+            }
+        }
+
+        return null;
     }
 
     normalizeStatus(val) {
@@ -856,6 +971,19 @@ class CptAdapter extends utils.Adapter {
         return null;
     }
 
+    async clearNearestType2States(reason = '') {
+        const textIds = ['name', 'address', 'stationId', 'distanceType'];
+        const numIds = ['distance.m', 'distance.km', 'lat', 'lon', 'freePorts', 'portCount'];
+        for (const id of textIds) {
+            await this.setStateAsync(`nearestType2.${id}`, { val: '', ack: true });
+        }
+        for (const id of numIds) {
+            await this.setStateAsync(`nearestType2.${id}`, { val: 0, ack: true });
+        }
+        await this.setStateAsync('nearestType2.lastUpdate', { val: new Date().toISOString(), ack: true });
+        if (reason) this.log.debug(`nearestType2 geleert: ${reason}`);
+    }
+
     async updateNearestType2(lat, lon) {
         // NOTE: A previous build accidentally inserted an invalid stray "(lat, lon) {" line here.
         // Keep this method as the only function header.
@@ -899,6 +1027,7 @@ class CptAdapter extends utils.Adapter {
             if (resp.status < 200 || resp.status >= 300) {
                 this.log.warn(`nearestType2: HTTP ${resp.status}`);
                 await this.setStateAsync('nearestType2.lastError', { val: `HTTP ${resp.status}`, ack: true });
+                await this.clearNearestType2States(`HTTP ${resp.status}`);
                 return;
             }
             // Axios may return plain text even if it is JSON. Be robust.
@@ -943,13 +1072,16 @@ class CptAdapter extends utils.Adapter {
                     // must have at least one available port
                     if (!(Number(freePorts) > 0)) continue;
 
-                    const stationId = String(st?.device_id ?? st?.station_id ?? st?.id ?? '').trim();
-                    const prefix = stationId ? this.stationPrefixByDeviceId[stationId] : null;
+                    const prefix = await this.findKnownStationPrefixForNearestCandidate(st);
                     if (prefix) {
-                        const stState = await this.getStateAsync(prefix + '.statusDerived').catch(() => null);
+                        const [stState, freeState] = await Promise.all([
+                            this.getStateAsync(prefix + '.statusDerived').catch(() => null),
+                            this.getStateAsync(prefix + '.freePorts').catch(() => null),
+                        ]);
                         const polled = stState ? stState.val : undefined;
-                        if (isBadStatus(polled)) {
-                            // skip: polled status indicates fault/unavailable
+                        const polledFree = Number(freeState?.val);
+                        if (isBadStatus(polled) || (Number.isFinite(polledFree) && polledFree <= 0)) {
+                            // skip: internally polled station says unavailable/fault or no free ports
                             continue;
                         }
                     }
@@ -970,6 +1102,7 @@ class CptAdapter extends utils.Adapter {
             if (!nearest) {
                 this.log.info('nearestType2: keine Treffer');
                 await this.setStateAsync('nearestType2.lastError', { val: 'keine Treffer', ack: true });
+                await this.clearNearestType2States('keine Treffer');
                 return;
             }
 
@@ -1006,14 +1139,17 @@ class CptAdapter extends utils.Adapter {
             const stationId = String(nearest.device_id ?? nearest.station_id ?? nearest.id ?? '').trim();
 
             // Prefer internally refreshed station states when we can map the nearest API hit to a known station.
-            // This keeps the "Nächste freie Typ2" card consistent with the station list below.
-            const nearestPrefix = stationId ? this.stationPrefixByDeviceId[stationId] : null;
+            // Match first by exact deviceId, then by GPS/name proximity. This keeps the travel card
+            // consistent with the locally polled fixed stations below.
+            const nearestPrefix = await this.findKnownStationPrefixForNearestCandidate(nearest);
             if (nearestPrefix) {
-                const [freeSt, countSt, nameSt, addrSt] = await Promise.all([
+                const [freeSt, countSt, nameSt, citySt, latKnownSt, lonKnownSt] = await Promise.all([
                     this.getStateAsync(nearestPrefix + '.freePorts').catch(() => null),
                     this.getStateAsync(nearestPrefix + '.portCount').catch(() => null),
                     this.getStateAsync(nearestPrefix + '.name').catch(() => null),
-                    this.getStateAsync(nearestPrefix + '.address').catch(() => null),
+                    this.getStateAsync(nearestPrefix + '.city').catch(() => null),
+                    this.getStateAsync(nearestPrefix + '.gps.lat').catch(() => null),
+                    this.getStateAsync(nearestPrefix + '.gps.lon').catch(() => null),
                 ]);
                 if (freeSt?.val !== undefined && freeSt?.val !== null && freeSt?.val !== '') {
                     const v = Number(freeSt.val);
@@ -1023,12 +1159,22 @@ class CptAdapter extends utils.Adapter {
                     const v = Number(countSt.val);
                     if (Number.isFinite(v)) portCount = v;
                 }
-                if ((!name || !String(name).trim()) && nameSt?.val) {
+                if (nameSt?.val) {
                     nearest.station_name = String(nameSt.val);
                 }
-                if ((!addressFull || !String(addressFull).trim()) && addrSt?.val) {
-                    nearest.address = String(addrSt.val);
+                if (citySt?.val) {
+                    const cityVal = String(citySt.val).trim();
+                    if (cityVal) {
+                        nearest.city = cityVal;
+                        if (!addressFull || !String(addressFull).trim()) {
+                            nearest.address = cityVal;
+                        }
+                    }
                 }
+                const knownLat = Number(latKnownSt?.val);
+                const knownLon = Number(lonKnownSt?.val);
+                if (Number.isFinite(knownLat)) nearest.lat = knownLat;
+                if (Number.isFinite(knownLon)) nearest.lon = knownLon;
             }
 
             const resolvedName = nearest.station_name || nearest.name || nearest.name1 || name || '';
@@ -1048,6 +1194,8 @@ class CptAdapter extends utils.Adapter {
             await this.setStateAsync('nearestType2.stationId', { val: stationId, ack: true });
             await this.setStateAsync('nearestType2.lastUpdate', { val: new Date().toISOString(), ack: true });
         } catch (e) {
+            await this.setStateAsync('nearestType2.lastError', { val: e.message, ack: true });
+            await this.clearNearestType2States(`Exception: ${e.message}`);
             this.log.debug(`nearestType2 Fehler: ${e.message}`);
         }
     }
@@ -1260,6 +1408,11 @@ class CptAdapter extends utils.Adapter {
             ['deviceId2', { name: 'Device ID (P2)', type: 'string', role: 'value', read: true, write: false }],
             ['enabled', { name: 'Aktiv', type: 'boolean', role: 'indicator', read: true, write: false }],
             ['valid', { name: 'Valid (vollständige Daten)', type: 'boolean', role: 'indicator', read: true, write: false }],
+            ['pollingActive', { name: 'Polling aktiv', type: 'boolean', role: 'indicator', read: true, write: false }],
+            ['autoDisabled', { name: 'Automatisch deaktiviert', type: 'boolean', role: 'indicator', read: true, write: false }],
+            ['consecutiveHardErrors', { name: 'Harte Fehler in Folge', type: 'number', role: 'value', read: true, write: false }],
+            ['lastError', { name: 'Letzter Fehler', type: 'string', role: 'text', read: true, write: false }],
+            ['lastErrorAt', { name: 'Zeitpunkt letzter Fehler', type: 'string', role: 'date', read: true, write: false }],
             ['notifyOnAvailable', { name: 'Benachrichtigen wenn verfügbar', type: 'boolean', role: 'switch', read: true, write: true, def: false }],
             ['testNotify', { name: 'Test: Notify (Button)', type: 'boolean', role: 'button', read: true, write: true, def: false }],
             ['statusDerived', { name: 'Status (aus Ports)', type: 'string', role: 'value', read: true, write: false }],
@@ -1310,6 +1463,14 @@ class CptAdapter extends utils.Adapter {
         await this.setStateAsync(`${stationPrefix}.deviceId1`, { val: String(station.deviceId1 ?? ''), ack: true });
         await this.setStateAsync(`${stationPrefix}.deviceId2`, { val: station.deviceId2 ? String(station.deviceId2) : '', ack: true });
         await this.setStateAsync(`${stationPrefix}.enabled`, { val: !!station.enabled, ack: true });
+        const key = this.getStationRuntimeKey(station);
+        const meta = this.stationErrorMeta[key] || { consecutiveHardErrors: 0, autoDisabled: false, lastError: '', lastErrorAt: '' };
+        this.stationErrorMeta[key] = meta;
+        await this.setStateAsync(`${stationPrefix}.pollingActive`, { val: !meta.autoDisabled, ack: true });
+        await this.setStateAsync(`${stationPrefix}.autoDisabled`, { val: !!meta.autoDisabled, ack: true });
+        await this.setStateAsync(`${stationPrefix}.consecutiveHardErrors`, { val: Number(meta.consecutiveHardErrors || 0), ack: true });
+        await this.setStateAsync(`${stationPrefix}.lastError`, { val: String(meta.lastError || ''), ack: true });
+        await this.setStateAsync(`${stationPrefix}.lastErrorAt`, { val: String(meta.lastErrorAt || ''), ack: true });
         const curDistanceType = await this.getStateAsync(`${stationPrefix}.distanceType`).catch(() => null);
         if (!curDistanceType || curDistanceType.val === null || curDistanceType.val === undefined || curDistanceType.val === '') {
             await this.setStateAsync(`${stationPrefix}.distanceType`, { val: this.getTomTomEnabled() ? 'tomtom' : 'airline', ack: true });
@@ -1356,8 +1517,10 @@ class CptAdapter extends utils.Adapter {
             const res = await axios.get(url, { timeout: 12000 });
             return res.data || {};
         } catch (e) {
-            this.log.warn(`Fetch fehlgeschlagen für deviceId=${deviceId}: ${e.message}`);
-            return null;
+            const status = Number(e?.response?.status);
+            const msg = e?.message || 'Unbekannter Fehler';
+            this.log.warn(`Fetch fehlgeschlagen für deviceId=${deviceId}: ${msg}`);
+            return { __fetchError: true, status: Number.isFinite(status) ? status : null, message: msg, deviceId };
         }
     }
 
@@ -1403,6 +1566,13 @@ class CptAdapter extends utils.Adapter {
     async updateAllStations(stations) {
         const currentPrefixes = new Set();
         for (const st of stations) {
+            if (this.isStationAutoDisabled(st)) {
+                const knownPrefix = this.stationPrefixByName[st.name];
+                if (knownPrefix) currentPrefixes.add(knownPrefix);
+                this.log.debug(`Überspringe automatisch deaktivierte Station: ${st.name}`);
+                continue;
+            }
+
             const data1 = await this.safeFetch(st.deviceId1);
             const data2 = st.deviceId2 ? await this.safeFetch(st.deviceId2) : null;
 
@@ -1418,6 +1588,21 @@ class CptAdapter extends utils.Adapter {
 
             await this.ensureCityChannel(`stations.${cityKey}`, city);
             await this.ensureStationObjects(stationPrefix, st, city);
+
+            const err1 = data1 && data1.__fetchError ? data1 : null;
+            const err2 = data2 && data2.__fetchError ? data2 : null;
+            const hardErr = err1 || err2;
+            if (hardErr) {
+                const meta = await this.registerStationFetchError(st, stationPrefix, hardErr);
+                await this.updateStateIfChanged(`${stationPrefix}.valid`, false);
+                await this.updateStateIfChanged(`${stationPrefix}.lastUpdate`, new Date().toISOString());
+                if (meta.autoDisabled) {
+                    await this.updateStateIfChanged(`${stationPrefix}.statusDerived`, 'auto_disabled');
+                    continue;
+                }
+            } else {
+                await this.resetStationErrorMeta(st, stationPrefix);
+            }
 
                         // remember station prefixes for car-trigger notifications
             if (!this.stationPrefixes.includes(stationPrefix)) this.stationPrefixes.push(stationPrefix);
@@ -1517,6 +1702,7 @@ class CptAdapter extends utils.Adapter {
                     reason: 'portAvailable',
                 });
             }
+
 
             this.log.debug(`Aktualisiert: ${st.name} city=${city} freePorts=${freePorts}/${portCount} derived=${derived}`);
         }
@@ -1767,8 +1953,9 @@ async cleanupObsoleteStations(currentPrefixes) {
         const prefixesFiltered = prefixesAll.filter((p) => {
             const en = stationStates[this.namespace + '.' + p + '.enabled']?.val === true;
             const valid = stationStates[this.namespace + '.' + p + '.valid']?.val !== false;
+            const autoDisabled = stationStates[this.namespace + '.' + p + '.autoDisabled']?.val === true;
             const city = stationStates[this.namespace + '.' + p + '.city']?.val;
-            return en && valid && city && String(city) !== 'Unbekannt';
+            return en && valid && !autoDisabled && city && String(city) !== 'Unbekannt';
         });
 
         // Sort by current distance (dynamic, based on car position). Stations without distance go to the end.
@@ -2004,8 +2191,9 @@ async cleanupObsoleteStations(currentPrefixes) {
         const prefixesFiltered = prefixesAll.filter((p) => {
             const en = stationStates[this.namespace + '.' + p + '.enabled']?.val === true;
             const valid = stationStates[this.namespace + '.' + p + '.valid']?.val !== false; // default true
+            const autoDisabled = stationStates[this.namespace + '.' + p + '.autoDisabled']?.val === true;
             const city = stationStates[this.namespace + '.' + p + '.city']?.val;
-            return en && valid && city && String(city) !== 'Unbekannt';
+            return en && valid && !autoDisabled && city && String(city) !== 'Unbekannt';
         });
 
         // Sort by current distance (dynamic, based on car position). Stations without distance go to the end.
@@ -2342,6 +2530,7 @@ async onReady() {
 
         // create tree based on current city names
         for (const st of enabledStations) {
+            if (this.isStationAutoDisabled(st)) continue;
             const data1 = await this.safeFetch(st.deviceId1);
             const data2 = st.deviceId2 ? await this.safeFetch(st.deviceId2) : null;
             const city = this.pickCity(data1, data2);
