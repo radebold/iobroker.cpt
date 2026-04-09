@@ -154,6 +154,59 @@ class CptAdapter extends utils.Adapter {
         }
     }
 
+    async disableStationInConfig(station, reason = '') {
+        try {
+            const adapterObjId = `system.adapter.${this.namespace}`;
+            const obj = await this.getForeignObjectAsync(adapterObjId);
+            if (!obj || !obj.native) {
+                this.log.warn(`Auto-Disable: Adapter-Objekt ${adapterObjId} nicht gefunden`);
+                return false;
+            }
+
+            const stations = Array.isArray(obj.native.stations) ? [...obj.native.stations] : [];
+            if (!stations.length) {
+                this.log.warn('Auto-Disable: Keine Stationen in der Adapter-Konfiguration gefunden');
+                return false;
+            }
+
+            const stationD1 = station?.deviceId1 != null ? String(station.deviceId1) : '';
+            const stationD2 = station?.deviceId2 != null ? String(station.deviceId2) : '';
+            const stationName = station?.name != null ? String(station.name).trim() : '';
+            let changed = false;
+
+            const updatedStations = stations.map((cfg) => {
+                if (!cfg || typeof cfg !== 'object') return cfg;
+                const cfgD1 = cfg.deviceId1 ?? cfg.stationId ?? cfg.deviceId ?? cfg.id;
+                const cfgD2 = cfg.deviceId2 ?? null;
+                const cfgName = cfg.name != null ? String(cfg.name).trim() : '';
+                const match =
+                    (stationD1 && String(cfgD1 ?? '') === stationD1) ||
+                    (stationD2 && String(cfgD2 ?? '') === stationD2) ||
+                    (stationName && cfgName === stationName);
+
+                if (!match) return cfg;
+                if (cfg.enabled === false) return cfg;
+                changed = true;
+                return { ...cfg, enabled: false };
+            });
+
+            if (!changed) {
+                this.log.warn(`Auto-Disable: Keine passende Config-Zeile für Station ${stationName || stationD1 || this.getStationRuntimeKey(station)} gefunden`);
+                return false;
+            }
+
+            obj.native.stations = updatedStations;
+            await this.setForeignObjectAsync(adapterObjId, obj);
+            this.config.stations = updatedStations;
+            this.enabledStations = (Array.isArray(this.enabledStations) ? this.enabledStations : []).filter((s) => this.getStationRuntimeKey(s) !== this.getStationRuntimeKey(station));
+            this.log.warn(`Station ${stationName || stationD1 || this.getStationRuntimeKey(station)} wurde dauerhaft in der Admin-Konfiguration deaktiviert${reason ? ` (${reason})` : ''}`);
+            return true;
+        } catch (e) {
+            this.log.error(`Auto-Disable: Konnte Station nicht in der Admin-Konfiguration deaktivieren: ${e.message}`);
+            return false;
+        }
+    }
+
     async registerStationFetchError(station, stationPrefix, errInfo) {
         const key = this.getStationRuntimeKey(station);
         const meta = this.stationErrorMeta[key] || { consecutiveHardErrors: 0, autoDisabled: false, lastError: '', lastErrorAt: '' };
@@ -162,11 +215,13 @@ class CptAdapter extends utils.Adapter {
         const now = new Date().toISOString();
         meta.lastError = String(errInfo?.message || 'Fetch fehlgeschlagen');
         meta.lastErrorAt = now;
+        let configDisabled = false;
         if (isHard) {
             meta.consecutiveHardErrors = Number(meta.consecutiveHardErrors || 0) + 1;
             if (!meta.autoDisabled && meta.consecutiveHardErrors >= this.stationAutoDisableThreshold) {
                 meta.autoDisabled = true;
                 this.log.warn(`Station ${station?.name || key} wurde nach ${meta.consecutiveHardErrors} harten Fehlern automatisch deaktiviert (${meta.lastError})`);
+                configDisabled = await this.disableStationInConfig(station, `${meta.consecutiveHardErrors} harte Fehler: ${meta.lastError}`);
             }
         } else {
             meta.consecutiveHardErrors = 0;
@@ -178,6 +233,9 @@ class CptAdapter extends utils.Adapter {
             await this.updateStateIfChanged(`${stationPrefix}.lastErrorAt`, meta.lastErrorAt || '');
             await this.updateStateIfChanged(`${stationPrefix}.autoDisabled`, !!meta.autoDisabled);
             await this.updateStateIfChanged(`${stationPrefix}.pollingActive`, !meta.autoDisabled);
+            if (configDisabled) {
+                await this.updateStateIfChanged(`${stationPrefix}.enabled`, false);
+            }
         }
         return meta;
     }
