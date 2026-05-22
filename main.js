@@ -94,6 +94,11 @@ class CptAdapter extends utils.Adapter {
             : 10;
         this.tomtomDistanceCache = new Map();
         this.tomtomWarned = false;
+        // Pause TomTom temporarily after rate-limit responses (HTTP 429)
+        this.tomtomPausedUntil = 0;
+        this.tomtomRateLimitPauseMs = 30 * 60 * 1000;
+        // Avoid repeated route lookups during normal polling when car/station coordinates did not change
+        this.distanceInputCacheByStation = {};
 
         // Notification filters
         this.notifySocBelow = (this.config && this.config.notifySocBelow !== undefined && this.config.notifySocBelow !== null && this.config.notifySocBelow !== '')
@@ -240,6 +245,14 @@ class CptAdapter extends utils.Adapter {
             return fallback;
         }
 
+        if (this.tomtomPausedUntil && Date.now() < this.tomtomPausedUntil) {
+            this.log.debug(`TomTom pausiert wegen Rate-Limit bis ${new Date(this.tomtomPausedUntil).toISOString()} -> Luftlinie aktiv`);
+            return {
+                ...fallback,
+                source: 'fallback_rate_limited',
+            };
+        }
+
         const cacheMin = Number.isFinite(this.tomtomCacheMin) ? Number(this.tomtomCacheMin) : 10;
         const cacheKey = this.makeTomTomCacheKey(lat1, lon1, lat2, lon2);
         const now = Date.now();
@@ -294,15 +307,20 @@ class CptAdapter extends utils.Adapter {
             const errText = typeof resp?.data === 'string' ? resp.data : JSON.stringify(resp?.data || {});
             throw new Error(`HTTP ${resp.status} ${errText}`.slice(0, 500));
         } catch (e) {
-            if (!this.tomtomWarned) {
+            const msg = e && e.message ? String(e.message) : String(e);
+            const isRateLimit = msg.includes('HTTP 429') || msg.includes('TooManyRequests') || msg.includes('rate limit');
+            if (isRateLimit) {
+                this.tomtomPausedUntil = Date.now() + this.tomtomRateLimitPauseMs;
+                this.log.warn(`TomTom Rate-Limit erreicht, pausiere Routing für ${Math.round(this.tomtomRateLimitPauseMs / 60000)} Minuten und nutze Luftlinie: ${msg}`);
+            } else if (!this.tomtomWarned) {
                 this.tomtomWarned = true;
-                this.log.warn(`TomTom Routing nicht nutzbar, falle auf Luftlinie zurück: ${e.message}`);
+                this.log.warn(`TomTom Routing nicht nutzbar, falle auf Luftlinie zurück: ${msg}`);
             } else {
-                this.log.debug(`TomTom Routing fehlgeschlagen, fallback Luftlinie: ${e.message}`);
+                this.log.debug(`TomTom Routing fehlgeschlagen, fallback Luftlinie: ${msg}`);
             }
             return {
                 ...fallback,
-                source: 'fallback',
+                source: isRateLimit ? 'fallback_rate_limited' : 'fallback',
             };
         }
     }
@@ -1187,17 +1205,34 @@ class CptAdapter extends utils.Adapter {
         return { prev, now, entered: !prev && now, exited: prev && !now, distanceM: d };
     }
 
+    subscriptionMatchesStation(stationValue, stationPrefixRel, stationName) {
+        const st = String(stationValue || '').trim();
+        if (!st) return false;
+        if (st === '__ALL__') return true;
+
+        const prefix = String(stationPrefixRel || '').trim();
+        const station = String(stationName || '').trim();
+        const prefixTail = prefix.split('.').pop() || '';
+
+        // Accept all variants that can appear in the Admin UI/config.
+        // Examples: "Eichenweg", "eichenweg", "name:Eichenweg",
+        // "stations.albershausen.eichenweg".
+        if (st === prefix || st === station || st === prefixTail) return true;
+
+        const normSt = this.normalizeCompareText(st.replace(/^name:/i, ''));
+        const candidates = [
+            station,
+            prefix,
+            prefixTail,
+            this.makeSafeName(station),
+        ].map((v) => this.normalizeCompareText(v)).filter(Boolean);
+
+        return candidates.includes(normSt);
+    }
+
     stationHasNotifyTarget(stationPrefixRel, stationName) {
         const subs = this.getSubscriptions();
-        const hasSubs = subs.some((s) => {
-            if (!s || !isTrue(s.enabled)) return false;
-            const stVal = String(s.station || '').trim();
-            if (!stVal) return false;
-            if (stVal === '__ALL__') return true;
-            if (stVal.startsWith('name:')) return String(stationName || '').toLowerCase() === stVal.replace(/^name:/, '').trim().toLowerCase();
-            return stVal === String(stationPrefixRel);
-        });
-        return hasSubs;
+        return subs.some((s) => s && isTrue(s.enabled) && this.subscriptionMatchesStation(s.station, stationPrefixRel, stationName));
     }
 
     async attemptNotifyForStation({ stationPrefixRel, city, stationName, freePorts, portCount, reason }) {
@@ -1217,13 +1252,16 @@ class CptAdapter extends utils.Adapter {
         // Only one notification per free phase AND car position key
         if (meta.notifiedPosKey && meta.notifiedPosKey === posKey) return;
 
-        // Station toggle OR subscriptions decide whether station is relevant
+        // Station toggle AND subscriptions decide whether station is relevant
         const notifyState = await this.getStateAsync(`${stationPrefixRel}.notifyOnAvailable`).catch(() => null);
         const notifyEnabled = notifyState?.val === true;
         const hasSubs = this.stationHasNotifyTarget(stationPrefixRel, stationName);
 
-        // New rule: Station must have Notify enabled AND there must be at least one matching subscription
-        if (!notifyEnabled || !hasSubs) return;
+        // Station must have Notify enabled AND there must be at least one matching subscription
+        if (!notifyEnabled || !hasSubs) {
+            this.log.debug(`Notify übersprungen (${reason}): ${stationName} (${city}) – notifyOnAvailable=${notifyEnabled}, subscriptionMatch=${hasSubs}, prefix=${stationPrefixRel}`);
+            return;
+        }
 
         // Filters: SoC + distance must be determinable and pass
         const f = await this.passesNotifyFilters(stationPrefixRel);
@@ -1498,15 +1536,18 @@ class CptAdapter extends utils.Adapter {
 
             await this.cleanupObsoletePortStates(stationPrefix, portCount);
 
-            // notify logic: when any port transitions to "available"
-            if (anyPortBecameAvailable) {
+            // Notify on transition to available AND also evaluate already-free stations.
+            // Duplicate messages are suppressed by attemptNotifyForStation() via position key.
+            // This is important after adapter restart/config changes or if the SoC threshold is raised
+            // while the station is already free.
+            if (freePorts > 0) {
                 await this.attemptNotifyForStation({
                     stationPrefixRel: stationPrefix,
                     city,
                     stationName: st.name,
                     freePorts,
                     portCount,
-                    reason: 'portAvailable',
+                    reason: anyPortBecameAvailable ? 'portAvailable' : 'pollFreeCheck',
                 });
             }
 
@@ -1532,9 +1573,32 @@ class CptAdapter extends utils.Adapter {
                 await this.updateStateIfChanged(`${stationPrefixRel}.distance.km`, null);
                 await this.updateStateIfChanged(`${stationPrefixRel}.distance.m`, null);
                 await this.updateStateIfChanged(`${stationPrefixRel}.distanceType`, 'unknown');
+                delete this.distanceInputCacheByStation[stationPrefixRel];
                 return;
             }
-            const dist = await this.getDistanceInfo(latCar, lonCar, Number(gps.lat), Number(gps.lon));
+
+            const stLat = Number(gps.lat);
+            const stLon = Number(gps.lon);
+            if (!Number.isFinite(stLat) || !Number.isFinite(stLon)) return;
+
+            const round = (n) => Number(n).toFixed(5);
+            const inputKey = `${round(latCar)},${round(lonCar)}>${round(stLat)},${round(stLon)}`;
+            const cachedKey = this.distanceInputCacheByStation[stationPrefixRel];
+
+            if (cachedKey === inputKey) {
+                const [kmState, mState] = await Promise.all([
+                    this.getStateAsync(`${stationPrefixRel}.distance.km`).catch(() => null),
+                    this.getStateAsync(`${stationPrefixRel}.distance.m`).catch(() => null),
+                ]);
+                const kmExisting = Number(kmState?.val);
+                const mExisting = Number(mState?.val);
+                if (Number.isFinite(kmExisting) && Number.isFinite(mExisting)) {
+                    this.log.debug(`Distanz unverändert (${stationPrefixRel}) -> vorhandene Distanz weiterverwenden, keine TomTom-Abfrage`);
+                    return;
+                }
+            }
+
+            const dist = await this.getDistanceInfo(latCar, lonCar, stLat, stLon);
             const km = Number(dist?.km);
             const m = Number(dist?.m);
             if (!Number.isFinite(km) || !Number.isFinite(m)) return;
@@ -1542,10 +1606,12 @@ class CptAdapter extends utils.Adapter {
             await this.updateStateIfChanged(`${stationPrefixRel}.distance.km`, kmRound);
             await this.updateStateIfChanged(`${stationPrefixRel}.distance.m`, Math.round(m));
             await this.updateDistanceSourceStates(String(dist?.source || 'airline'), stationPrefixRel);
+            this.distanceInputCacheByStation[stationPrefixRel] = inputKey;
         } catch (e) {
             this.log.debug(`Distanzberechnung fehlgeschlagen (${stationPrefixRel}): ${e.message}`);
         }
     }
+
     
 async cleanupObsoleteStations(currentPrefixes) {
     // currentPrefixes: Set of rel station prefixes like "stations.<cityKey>.<stationKey>"
