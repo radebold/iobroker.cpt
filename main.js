@@ -1252,14 +1252,14 @@ class CptAdapter extends utils.Adapter {
         // Only one notification per free phase AND car position key
         if (meta.notifiedPosKey && meta.notifiedPosKey === posKey) return;
 
-        // Station toggle AND subscriptions decide whether station is relevant
+        // A matching subscription is sufficient. The per-station notifyOnAvailable state is an optional legacy/manual switch.
+        // Requiring both caused valid Admin-UI subscriptions to be skipped silently when notifyOnAvailable stayed false.
         const notifyState = await this.getStateAsync(`${stationPrefixRel}.notifyOnAvailable`).catch(() => null);
         const notifyEnabled = notifyState?.val === true;
         const hasSubs = this.stationHasNotifyTarget(stationPrefixRel, stationName);
 
-        // Station must have Notify enabled AND there must be at least one matching subscription
-        if (!notifyEnabled || !hasSubs) {
-            this.log.debug(`Notify übersprungen (${reason}): ${stationName} (${city}) – notifyOnAvailable=${notifyEnabled}, subscriptionMatch=${hasSubs}, prefix=${stationPrefixRel}`);
+        if (!notifyEnabled && !hasSubs) {
+            this.log.debug(`Notify übersprungen (${reason}): ${stationName} (${city}) – kein aktives Abo und notifyOnAvailable=false, prefix=${stationPrefixRel}`);
             return;
         }
 
