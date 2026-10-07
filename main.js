@@ -94,6 +94,13 @@ class CptAdapter extends utils.Adapter {
             : 10;
         this.tomtomDistanceCache = new Map();
         this.tomtomWarned = false;
+        this.tomtomBlockedUntil = 0;
+
+        // ChargePoint fetch health: consecutive HTTP-400 errors per device.
+        // After 10 consecutive HTTP 400 responses the owning configured station
+        // is persisted as disabled and no longer queried.
+        this.fetchFailureCounts = new Map();
+        this.disabledDeviceIds = new Set();
 
         // Notification filters
         this.notifySocBelow = (this.config && this.config.notifySocBelow !== undefined && this.config.notifySocBelow !== null && this.config.notifySocBelow !== '')
@@ -249,6 +256,10 @@ class CptAdapter extends utils.Adapter {
             this.tomtomDistanceCache.delete(cacheKey);
         }
 
+        if (this.tomtomBlockedUntil > now) {
+            return { ...fallback, source: 'fallback' };
+        }
+
         const locs = `${Number(lat1)},${Number(lon1)}:${Number(lat2)},${Number(lon2)}`;
         const url = `https://api.tomtom.com/routing/1/calculateRoute/${locs}/json`;
         const params = {
@@ -294,6 +305,10 @@ class CptAdapter extends utils.Adapter {
             const errText = typeof resp?.data === 'string' ? resp.data : JSON.stringify(resp?.data || {});
             throw new Error(`HTTP ${resp.status} ${errText}`.slice(0, 500));
         } catch (e) {
+            if (/HTTP 429\b/.test(String(e?.message || ''))) {
+                this.tomtomBlockedUntil = Date.now() + (30 * 60 * 1000);
+                this.log.warn('TomTom Rate-Limit erreicht (HTTP 429) – Routing für 30 Minuten pausiert, Luftlinie wird verwendet.');
+            }
             if (!this.tomtomWarned) {
                 this.tomtomWarned = true;
                 this.log.warn(`TomTom Routing nicht nutzbar, falle auf Luftlinie zurück: ${e.message}`);
@@ -458,19 +473,54 @@ class CptAdapter extends utils.Adapter {
     async sendAvailableNotification(ctx) {
         const prefix = ctx.isTest ? 'TEST: ' : '';
         const details = ctx.freePorts !== undefined && ctx.portCount !== undefined ? ` (${ctx.freePorts}/${ctx.portCount})` : '';
-        const text = `${prefix}Ladestation ${ctx.station} in ${ctx.city} ist nun frei${details}`;
+
+        let chargeEndText = '';
+        if (!ctx.isTest && Number.isFinite(this.carSoc)) {
+            // User model: 0 -> 100 % = 180 min, plus 10 min until charging starts.
+            const remainingChargeMin = Math.max(0, ((100 - this.carSoc) / 100) * 180);
+            const end = new Date(Date.now() + ((10 + remainingChargeMin) * 60 * 1000));
+            const hhmm = new Intl.DateTimeFormat('de-DE', {
+                timeZone: 'Europe/Berlin',
+                hour: '2-digit',
+                minute: '2-digit',
+            }).format(end);
+            chargeEndText = `. Geplantes Ladezeitende wäre ca. ${hhmm} Uhr`;
+        }
+
+        const text = `${prefix}Ladestation ${ctx.station} in ${ctx.city} ist nun frei${details}${chargeEndText}`;
         return this.sendMessageToChannels(text, ctx);
+    }
+
+    subscriptionMatchesStation(stationValue, stationPrefixRel, stationName) {
+        const normalize = (s) =>
+            String(s || '')
+                .toLowerCase()
+                .trim()
+                .replace(/^name:/i, '')
+                .replace(/[^a-z0-9]/g, '');
+
+        const st = String(stationValue || '').trim();
+        if (!st) return false;
+        if (st === '__ALL__') return true;
+
+        const prefix = String(stationPrefixRel || '').trim();
+        const station = String(stationName || '').trim();
+        const prefixTail = prefix.split('.').pop() || '';
+
+        if (st === prefix || st === station || st === prefixTail) return true;
+
+        const normSt = normalize(st);
+        return [station, prefix, prefixTail, this.makeSafeName(station)]
+            .map(normalize)
+            .filter(Boolean)
+            .includes(normSt);
     }
 
     async notifySubscribers({ stationPrefixRel, city, stationName, freePorts, portCount, isTest = false }) {
         const subs = this.getSubscriptions();
         const matches = subs.filter((s) => {
             if (!s || !isTrue(s.enabled)) return false;
-            const st = String(s.station || '').trim();
-            if (!st) return false;
-            if (st === '__ALL__') return true;
-            if (st.startsWith('name:')) return String(stationName || '').toLowerCase() === st.replace(/^name:/, '').trim().toLowerCase();
-            return st === String(stationPrefixRel);
+            return this.subscriptionMatchesStation(s.station, stationPrefixRel, stationName);
         });
 
         // If nothing matches, do nothing (subscriptions define recipients)
@@ -1166,44 +1216,9 @@ class CptAdapter extends utils.Adapter {
     }
 
     stationHasNotifyTarget(stationPrefixRel, stationName) {
-        const normalize = (s) =>
-            String(s || '')
-                .toLowerCase()
-                .trim()
-                .replace(/[^a-z0-9]/g, '');
-
-        const subs = this.getSubscriptions();
-
-        const hasSubs = subs.some((s) => {
-            if (!s || !isTrue(s.enabled)) return false;
-
-            const stVal = String(s.station || '').trim();
-            if (!stVal) return false;
-
-            if (stVal === '__ALL__') return true;
-
-            const prefix = String(stationPrefixRel || '').trim();
-            const station = String(stationName || '').trim();
-            const prefixTail = prefix.split('.').pop() || '';
-
-            if (stVal === prefix || stVal === station || stVal === prefixTail) {
-                return true;
-            }
-
-            const normSub = normalize(stVal.replace(/^name:/i, ''));
-
-            const candidates = [
-                station,
-                prefix,
-                prefixTail
-            ]
-                .map(normalize)
-                .filter(Boolean);
-
-            return candidates.includes(normSub);
-        });
-
-        return hasSubs;
+        return this.getSubscriptions().some((s) =>
+            s && isTrue(s.enabled) && this.subscriptionMatchesStation(s.station, stationPrefixRel, stationName)
+        );
     }
 
     async attemptNotifyForStation({ stationPrefixRel, city, stationName, freePorts, portCount, reason }) {
@@ -1228,8 +1243,8 @@ class CptAdapter extends utils.Adapter {
         const notifyEnabled = notifyState?.val === true;
         const hasSubs = this.stationHasNotifyTarget(stationPrefixRel, stationName);
 
-        // New rule: Station must have Notify enabled AND there must be at least one matching subscription
-        if (!notifyEnabled || !hasSubs) return;
+        // Active subscriptions define recipients. The legacy station toggle must not block a valid subscription.
+        if (!hasSubs) return;
 
         // Filters: SoC + distance must be determinable and pass
         const f = await this.passesNotifyFilters(stationPrefixRel);
@@ -1347,13 +1362,79 @@ class CptAdapter extends utils.Adapter {
 
     // ---------- ChargePoint API ----------
 
+    async disableStationByDeviceId(deviceId) {
+        const id = String(deviceId);
+        this.disabledDeviceIds.add(id);
+
+        // Stop polling immediately in the running instance.
+        for (const st of (Array.isArray(this.enabledStations) ? this.enabledStations : [])) {
+            if (String(st?.deviceId1 ?? '') === id || String(st?.deviceId2 ?? '') === id) {
+                st.enabled = false;
+            }
+        }
+
+        // Persist enabled=false in system.adapter.<namespace>.native.stations so Admin UI reflects it.
+        const objId = `system.adapter.${this.namespace}`;
+        const obj = await this.getForeignObjectAsync(objId);
+        if (!obj?.native) throw new Error(`Adapter-Konfiguration ${objId} nicht gefunden`);
+
+        const stations = obj.native.stations;
+        let changed = false;
+        const disable = (st) => {
+            if (!st || typeof st !== 'object') return;
+            const match = String(st.deviceId1 ?? st.stationId ?? st.deviceId ?? st.id ?? '') === id ||
+                String(st.deviceId2 ?? '') === id;
+            if (match && isTrue(st.enabled !== undefined ? st.enabled : true)) {
+                st.enabled = false;
+                changed = true;
+            }
+        };
+
+        if (Array.isArray(stations)) stations.forEach(disable);
+        else if (stations && typeof stations === 'object') Object.values(stations).forEach(disable);
+
+        // Keep runtime config aligned as well.
+        const runtimeStations = this.config?.stations;
+        if (Array.isArray(runtimeStations)) runtimeStations.forEach(disable);
+        else if (runtimeStations && typeof runtimeStations === 'object') Object.values(runtimeStations).forEach(disable);
+
+        if (changed) {
+            await this.setForeignObjectAsync(objId, obj);
+            this.log.warn(`Station mit deviceId=${deviceId} nach 10 aufeinanderfolgenden HTTP-400-Fehlern automatisch deaktiviert (Admin-Konfiguration gespeichert).`);
+        }
+    }
+
     async safeFetch(deviceId) {
+        const id = String(deviceId);
+        if (this.disabledDeviceIds.has(id)) return null;
+
         try {
             const url = `https://mc.chargepoint.com/map-prod/v3/station/info?deviceId=${deviceId}`;
             this.log.debug(`GET ${url}`);
             const res = await axios.get(url, { timeout: 12000 });
+            this.fetchFailureCounts.delete(id);
             return res.data || {};
         } catch (e) {
+            const status = Number(e?.response?.status);
+            if (status === 400) {
+                const failures = (this.fetchFailureCounts.get(id) || 0) + 1;
+                this.fetchFailureCounts.set(id, failures);
+
+                if (failures >= 10) {
+                    try {
+                        await this.disableStationByDeviceId(deviceId);
+                    } catch (disableErr) {
+                        this.log.error(`Auto-Deaktivierung für deviceId=${deviceId} fehlgeschlagen: ${disableErr.message}`);
+                    }
+                    return null;
+                }
+
+                this.log.warn(`Fetch fehlgeschlagen für deviceId=${deviceId}: HTTP 400 (Fehler ${failures}/10)`);
+                return null;
+            }
+
+            // Only consecutive HTTP 400 errors count toward auto-disable.
+            this.fetchFailureCounts.delete(id);
             this.log.warn(`Fetch fehlgeschlagen für deviceId=${deviceId}: ${e.message}`);
             return null;
         }
@@ -1401,6 +1482,8 @@ class CptAdapter extends utils.Adapter {
     async updateAllStations(stations) {
         const currentPrefixes = new Set();
         for (const st of stations) {
+            if (st.enabled === false) continue;
+
             const data1 = await this.safeFetch(st.deviceId1);
             const data2 = st.deviceId2 ? await this.safeFetch(st.deviceId2) : null;
 
